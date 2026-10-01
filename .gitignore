@@ -1,0 +1,28 @@
+# Sensitive / local secrets & environments
+.aaa/
+.agents/
+.env
+secrets.*
+sensitive.*
+key.properties
+*.keystore
+*.jks
+
+# Flutter & Dart artifacts
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+
+# IDE & Editor files
+.idea/
+*.iml
+.vscode/
+
+# Clones & temporary scratch directories
+clones/
+scratch/
+.kotlin/
