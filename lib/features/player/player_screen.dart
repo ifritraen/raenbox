@@ -2216,6 +2216,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
                         fontFeatures: [FontFeature.tabularFigures()],
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onTap: _handleBack,
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        child: const Icon(
+                          Icons.fullscreen_exit_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
+                      ),
+                    ),
                   ],
                 );
               },

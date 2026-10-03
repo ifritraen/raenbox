@@ -139,12 +139,19 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
     _loadData();
   }
 
+  bool _userExitedFullscreen = false;
+
   @override
   void didChangeMetrics() {
     super.didChangeMetrics();
-    if (!mounted || _isFullscreen || _player == null || _currentStream == null) return;
+    if (!mounted || _player == null || _currentStream == null) return;
     final size = WidgetsBinding.instance.platformDispatcher.views.first.physicalSize;
-    if (size.width > size.height && !_isFullscreen) {
+    final isLandscape = size.width > size.height;
+
+    if (!isLandscape) {
+      // Returned to portrait, re-arm auto-fullscreen trigger
+      _userExitedFullscreen = false;
+    } else if (isLandscape && !_isFullscreen && !_userExitedFullscreen) {
       _openFullscreenPlayer();
     }
   }
@@ -1067,6 +1074,7 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     setState(() {
       _isFullscreen = false;
+      _userExitedFullscreen = true;
       if (result != null) {
         if (_detail!.isSeries) {
           _selectedSeason = result.season;
@@ -1709,28 +1717,33 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
 
   void _handleBack() {
     _saveWatchProgress();
+    final mini = MiniplayerService.instance;
     if (_player != null &&
         _currentStream != null &&
         _detail != null &&
         _videoController != null) {
-      _isHandedOver = true;
-      MiniplayerService.instance.dock(
-        player: _player!,
-        videoController: _videoController!,
-        subjectId: widget.subjectId,
-        title: _detail!.title,
-        coverUrl: _detail!.coverUrl,
-        subjectType: _detail!.subjectType,
-        currentStream: _currentStream!,
-        allStreams: _streams,
-        season: _detail!.isSeries ? _selectedSeason : 0,
-        episode: _detail!.isSeries ? _selectedEpisode : 0,
-        dubs: _detail!.dubs,
-        initialDub: _selectedDub,
-        seasons: _seasons,
-        apiService: widget.apiService,
-        storage: _storage,
-      );
+      if (!mini.isActive) {
+        _isHandedOver = true;
+        mini.dock(
+          player: _player!,
+          videoController: _videoController!,
+          subjectId: widget.subjectId,
+          title: _detail!.title,
+          coverUrl: _detail!.coverUrl,
+          subjectType: _detail!.subjectType,
+          currentStream: _currentStream!,
+          allStreams: _streams,
+          season: _detail!.isSeries ? _selectedSeason : 0,
+          episode: _detail!.isSeries ? _selectedEpisode : 0,
+          dubs: _detail!.dubs,
+          initialDub: _selectedDub,
+          seasons: _seasons,
+          apiService: widget.apiService,
+          storage: _storage,
+        );
+      } else {
+        _player?.pause();
+      }
     } else {
       _player?.pause();
     }
