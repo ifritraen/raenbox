@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
@@ -31,6 +31,8 @@ class MiniplayerService {
 
   final ValueNotifier<bool> isActiveNotifier = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isPlayingNotifier = ValueNotifier<bool>(false);
+  final ValueNotifier<Duration> positionNotifier = ValueNotifier<Duration>(Duration.zero);
+  final ValueNotifier<Duration> durationNotifier = ValueNotifier<Duration>(Duration.zero);
 
   final List<StreamSubscription> _subscriptions = [];
   LocalStorageService? _storage;
@@ -40,6 +42,9 @@ class MiniplayerService {
 
   void init(LocalStorageService storage) {
     _storage = storage;
+    PipService.onPauseRequested = () {
+      player?.pause();
+    };
   }
 
   /// Dock an existing player into the miniplayer service
@@ -84,10 +89,20 @@ class MiniplayerService {
     this.offlineAudioPath = offlineAudioPath;
 
     isPlayingNotifier.value = player.state.playing;
+    positionNotifier.value = player.state.position;
+    durationNotifier.value = player.state.duration;
 
     _subscriptions.add(player.stream.playing.listen((playing) {
       isPlayingNotifier.value = playing;
       PipService.setAutoPiPEnabled(playing);
+    }));
+
+    _subscriptions.add(player.stream.position.listen((pos) {
+      positionNotifier.value = pos;
+    }));
+
+    _subscriptions.add(player.stream.duration.listen((dur) {
+      durationNotifier.value = dur;
     }));
 
     _subscriptions.add(player.stream.completed.listen((completed) {
@@ -98,6 +113,11 @@ class MiniplayerService {
 
     isActiveNotifier.value = true;
     PipService.setAutoPiPEnabled(player.state.playing);
+  }
+
+  /// Seek in miniplayer
+  void seek(Duration pos) {
+    player?.seek(pos);
   }
 
   /// Toggle play / pause in docked miniplayer

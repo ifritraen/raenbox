@@ -74,6 +74,14 @@ class MovieBoxApp extends StatelessWidget {
           title: 'RaenBox',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.buildTheme(storage.activeThemePreset, isPureOled: storage.isPureOled),
+          builder: (context, navigatorChild) {
+            return Stack(
+              children: [
+                ?navigatorChild,
+                const MiniplayerWidget(),
+              ],
+            );
+          },
           home: child,
         );
       },
@@ -552,9 +560,6 @@ class _MainNavigationScaffoldState extends State<MainNavigationScaffold> with Wi
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Docked Miniplayer directly above category tabs / bottom nav
-                const MiniplayerWidget(),
-
                 // 1. Category Tabs Bar (Directly above bottom bar, on Home tab)
                 if (_currentIndex == 0) _buildCategoryTabsBar(),
 

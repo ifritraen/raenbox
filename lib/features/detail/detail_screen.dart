@@ -80,6 +80,7 @@ class _DetailScreenState extends State<DetailScreen> {
   StreamLink? _currentStream;
   bool _isPlaying = false;
   bool _isVideoLoading = true;
+  bool _isFullscreen = false;
   String? _videoError;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
@@ -1018,13 +1019,15 @@ class _DetailScreenState extends State<DetailScreen> {
 
   Future<void> _openFullscreenPlayer() async {
     if (_detail == null || _currentStream == null) return;
+    if (_player == null || _videoController == null) return;
     _saveWatchProgress();
-    final currentPos = _player?.state.position ?? _position;
-    await _player?.pause();
+    final currentPos = _player!.state.position;
 
+    setState(() => _isFullscreen = true);
+    await WidgetsBinding.instance.endOfFrame;
     if (!mounted) return;
 
-    final returnedPos = await Navigator.of(context).push<Duration>(
+    final result = await Navigator.of(context).push<PlayerHandoverResult>(
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           subjectId: widget.subjectId,
@@ -1040,18 +1043,29 @@ class _DetailScreenState extends State<DetailScreen> {
           seasons: _seasons,
           apiService: widget.apiService,
           initialPosition: currentPos,
+          existingPlayer: _player,
+          existingVideoController: _videoController,
+          fromDetailScreen: true,
         ),
       ),
     );
 
-    if (mounted && _player != null) {
-      if (returnedPos != null && returnedPos > Duration.zero) {
-        await _player!.seek(returnedPos);
+    if (!mounted) return;
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    setState(() {
+      _isFullscreen = false;
+      if (result != null) {
+        if (_detail!.isSeries) {
+          _selectedSeason = result.season;
+          _selectedEpisode = result.episode;
+        }
+        _currentStream = result.currentStream;
+        if (result.currentDub != null) _selectedDub = result.currentDub;
       }
-      _saveWatchProgress();
-      await _player!.play();
-      _startControlsTimer();
-    }
+    });
+    _saveWatchProgress();
+    _startControlsTimer();
   }
 
   void _showLanguageSelectorSheet() {
@@ -1661,10 +1675,29 @@ class _DetailScreenState extends State<DetailScreen> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
+  void _showCategorySheet() {
+    if (_storage != null && _detail != null) {
+      showBouncyCategorySheet(
+        context: context,
+        storage: _storage!,
+        record: LocalRecord(
+          subjectId: _detail!.subjectId,
+          title: _detail!.title,
+          coverUrl: _detail!.coverUrl,
+          subjectType: _detail!.subjectType,
+          updatedAt: DateTime.now(),
+        ),
+      ).then((_) {
+        if (mounted) {
+          setState(() => _isBookmarked = _storage!.isBookmarked(_detail!.subjectId));
+        }
+      });
+    }
+  }
+
   void _handleBack() {
     _saveWatchProgress();
     if (_player != null &&
-        _player!.state.playing &&
         _currentStream != null &&
         _detail != null &&
         _videoController != null) {
@@ -1912,37 +1945,8 @@ class _DetailScreenState extends State<DetailScreen> {
                                   color: _isBookmarked
                                       ? AppTheme.accentGreen
                                       : Colors.white,
-                                  onTap: () {
-                                    setState(
-                                        () => _isBookmarked = !_isBookmarked);
-                                    _storage?.toggleBookmark(
-                                      subjectId: d.subjectId,
-                                      title: d.title,
-                                      coverUrl: d.coverUrl,
-                                      subjectType: d.subjectType,
-                                    );
-                                  },
-                                  onLongPress: () {
-                                    if (_storage != null) {
-                                      showBouncyCategorySheet(
-                                        context: context,
-                                        storage: _storage!,
-                                        record: LocalRecord(
-                                          subjectId: d.subjectId,
-                                          title: d.title,
-                                          coverUrl: d.coverUrl,
-                                          subjectType: d.subjectType,
-                                          updatedAt: DateTime.now(),
-                                        ),
-                                      ).then((_) {
-                                        if (mounted) {
-                                          setState(() => _isBookmarked =
-                                              _storage!
-                                                  .isBookmarked(d.subjectId));
-                                        }
-                                      });
-                                    }
-                                  },
+                                  onTap: _showCategorySheet,
+                                  onLongPress: _showCategorySheet,
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -2201,6 +2205,7 @@ class _DetailScreenState extends State<DetailScreen> {
                 children: [
                   // Video Surface or Backdrop Poster
                   if (_videoController != null &&
+                      !_isFullscreen &&
                       !_isVideoLoading &&
                       _videoError == null)
                     Video(
@@ -2403,16 +2408,7 @@ class _DetailScreenState extends State<DetailScreen> {
                                           : Colors.white,
                                       size: 20,
                                     ),
-                                    onPressed: () {
-                                      setState(
-                                          () => _isBookmarked = !_isBookmarked);
-                                      _storage?.toggleBookmark(
-                                        subjectId: d.subjectId,
-                                        title: d.title,
-                                        coverUrl: d.coverUrl,
-                                        subjectType: d.subjectType,
-                                      );
-                                    },
+                                    onPressed: _showCategorySheet,
                                   ),
                                 ],
                               ),

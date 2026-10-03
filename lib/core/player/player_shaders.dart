@@ -304,6 +304,10 @@ class PlayerShaders {
       await mpv.setProperty('hr-seek', 'always');
       await mpv.setProperty('hr-seek-framedrop', 'no');
       await mpv.setProperty('cache', 'yes');
+      await mpv.setProperty('cache-secs', '120');
+      await mpv.setProperty('demuxer-readahead-secs', '60');
+      await mpv.setProperty('demuxer-max-bytes', '96MiB');
+      await mpv.setProperty('demuxer-max-back-bytes', '32MiB');
       debugPrint('[MPV] Low-level performance properties applied successfully');
     } catch (e) {
       debugPrint('[MPV] Error applying performance properties: $e');

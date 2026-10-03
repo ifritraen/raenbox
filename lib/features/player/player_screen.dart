@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -155,6 +156,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
   // Subtitles
   List<SubtitleItem> _subtitles = [];
   String? _currentSubtitleText;
+  int _subDelayMs = 0;
+  double _subFontSize = 16;
+  double _subBottom = 32;
+  bool _subBg = true;
+  int _subColor = 0xFFFFFFFF;
+
+  CaptionTrack? _pickEnglish() {
+    for (final c in _currentStream.captions) {
+      final l = c.language.toLowerCase();
+      if (l == 'en' || l == 'eng' || l.startsWith('en-') || c.lanName.toLowerCase().contains('english')) {
+        return c;
+      }
+    }
+    return null;
+  }
   CaptionTrack? _selectedCaption;
 
   // Player Settings & Gesture Preferences
@@ -343,6 +359,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
     _storage = await LocalStorageService.getInstance();
     _loadPlayerSettings();
+    _loadSubSettings();
+    try {
+      await (_player.platform as NativePlayer).setProperty('volume-max', '200');
+    } catch (_) {}
 
     if (widget.existingPlayer != null) {
       _isPlayerInitialized = true;
@@ -351,13 +371,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _startProgressTimer();
       _startPulseTimer();
       if (_currentStream.captions.isNotEmpty && _selectedCaption == null) {
-        final enCap = _currentStream.captions.firstWhere(
-          (c) =>
-              c.language.toLowerCase().contains('en') ||
-              c.lanName.toLowerCase().contains('english'),
-          orElse: () => _currentStream.captions.first,
-        );
-        _loadSubtitleTrack(enCap);
+        _loadSubtitleTrack(_pickEnglish());
       }
       if (mounted) setState(() {});
       return;
@@ -434,11 +448,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
       // Auto-load English subtitle if available
       if (_currentStream.captions.isNotEmpty && _selectedCaption == null) {
-        final enCap = _currentStream.captions.firstWhere(
-          (c) => c.language.toLowerCase().contains('en') || c.lanName.toLowerCase().contains('english'),
-          orElse: () => _currentStream.captions.first,
-        );
-        _loadSubtitleTrack(enCap);
+        _loadSubtitleTrack(_pickEnglish());
       }
 
       if (mounted) setState(() {});
@@ -459,8 +469,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     SubtitleItem? match;
+    final t = pos - Duration(milliseconds: _subDelayMs);
     for (final s in _subtitles) {
-      if (pos >= s.start && pos <= s.end) {
+      if (t >= s.start && t <= s.end) {
         match = s;
         break;
       }
@@ -518,7 +529,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
           seconds: int.parse(match.group(7)!),
           milliseconds: endMs,
         );
-        final textLines = lines.skipWhile((l) => !l.contains('-->')).skip(1).join('\n').trim();
+        final textLines = lines
+            .skipWhile((l) => !l.contains('-->'))
+            .skip(1)
+            .join('\n')
+            .replaceAll(RegExp(r'<[^>]*>|\{\\[^}]*\}'), '')
+            .trim();
         if (textLines.isNotEmpty) {
           items.add(SubtitleItem(start: start, end: end, text: textLines));
         }
@@ -784,7 +800,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
     } else if (_activePan == _ActivePanGesture.volume) {
       final delta = -dy / (screenSize.height * 0.75);
-      final newV = (_panStartVolume + delta).clamp(0.0, 1.0);
+      final newV = (_panStartVolume + delta).clamp(0.0, 2.0);
       _player.setVolume(newV * 100.0);
       setState(() {
         _volume = newV;
@@ -796,7 +812,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               : newV > 0.0
                   ? Icons.volume_down
                   : Icons.volume_mute,
-          progress: newV,
+          progress: newV / 2,
         );
       });
     } else if (_activePan == _ActivePanGesture.seek) {
@@ -1389,11 +1405,97 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   },
                 );
               }),
+              const Divider(color: Colors.white12),
+              _subSlider('Delay ${(_subDelayMs / 1000).toStringAsFixed(1)}s', _subDelayMs.toDouble(), -5000, 5000,
+                  (v) => _subDelayMs = (v / 100).round() * 100),
+              _subSlider('Size ${_subFontSize.round()}', _subFontSize, 10, 36, (v) => _subFontSize = v),
+              _subSlider('Bottom ${_subBottom.round()}', _subBottom, 8, 140, (v) => _subBottom = v),
+              SwitchListTile(
+                dense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
+                activeThumbColor: AppTheme.accentGreen,
+                title: const Text('Background', style: TextStyle(color: Colors.white, fontSize: 12)),
+                value: _subBg,
+                onChanged: (v) => setState(() {
+                  _subBg = v;
+                  _saveSubSettings();
+                }),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Wrap(
+                  spacing: 8,
+                  children: [0xFFFFFFFF, 0xFFFFEB3B, 0xFF69F0AE, 0xFF40C4FF, 0xFFFF8A80].map((c) {
+                    return GestureDetector(
+                      onTap: () => setState(() {
+                        _subColor = c;
+                        _saveSubSettings();
+                      }),
+                      child: Container(
+                        width: 22,
+                        height: 22,
+                        decoration: BoxDecoration(
+                          color: Color(c),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: _subColor == c ? AppTheme.accentGreen : Colors.white24,
+                            width: 2,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
             ],
           ),
         ),
       ],
     );
+  }
+
+  Widget _subSlider(String label, double value, double min, double max, void Function(double) onChange) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+          SizedBox(
+            height: 28,
+            child: Slider(
+              value: value.clamp(min, max),
+              min: min,
+              max: max,
+              activeColor: AppTheme.accentGreen,
+              onChanged: (v) => setState(() => onChange(v)),
+              onChangeEnd: (_) => _saveSubSettings(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadSubSettings() async {
+    final p = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _subDelayMs = p.getInt('sub_delay') ?? 0;
+      _subFontSize = p.getDouble('sub_size') ?? 16;
+      _subBottom = p.getDouble('sub_bottom') ?? 32;
+      _subBg = p.getBool('sub_bg') ?? true;
+      _subColor = p.getInt('sub_color') ?? 0xFFFFFFFF;
+    });
+  }
+
+  Future<void> _saveSubSettings() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt('sub_delay', _subDelayMs);
+    await p.setDouble('sub_size', _subFontSize);
+    await p.setDouble('sub_bottom', _subBottom);
+    await p.setBool('sub_bg', _subBg);
+    await p.setInt('sub_color', _subColor);
   }
 
   Widget _buildEpisodesDrawer() {
@@ -1514,29 +1616,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
       );
       return;
     }
-    if (_player.state.playing) {
-      _isHandedOver = true;
-      MiniplayerService.instance.dock(
-        player: _player,
-        videoController: _videoController,
-        subjectId: widget.subjectId,
-        title: widget.title,
-        coverUrl: widget.coverUrl,
-        subjectType: widget.subjectType,
-        currentStream: _currentStream,
-        allStreams: widget.allStreams,
-        season: _currentSeason,
-        episode: _currentEpisode,
-        dubs: _dubs,
-        initialDub: _currentDub,
-        seasons: _seasons,
-        apiService: widget.apiService,
-        offlineAudioPath: widget.offlineAudioPath,
-        storage: _storage,
-      );
-    } else {
-      _player.pause();
-    }
+    _isHandedOver = true;
+    MiniplayerService.instance.dock(
+      player: _player,
+      videoController: _videoController,
+      subjectId: widget.subjectId,
+      title: widget.title,
+      coverUrl: widget.coverUrl,
+      subjectType: widget.subjectType,
+      currentStream: _currentStream,
+      allStreams: widget.allStreams,
+      season: _currentSeason,
+      episode: _currentEpisode,
+      dubs: _dubs,
+      initialDub: _currentDub,
+      seasons: _seasons,
+      apiService: widget.apiService,
+      offlineAudioPath: widget.offlineAudioPath,
+      storage: _storage,
+    );
     Navigator.of(context).pop();
   }
 
@@ -1655,27 +1753,29 @@ class _PlayerScreenState extends State<PlayerScreen> {
             // Live Subtitle Overlay
             if (_currentSubtitleText != null && _currentSubtitleText!.isNotEmpty)
               Positioned(
-                bottom: _showControls ? 80 : 32,
+                bottom: _subBottom,
                 left: 32,
                 right: 32,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.75),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      _currentSubtitleText!,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        shadows: [
-                          Shadow(blurRadius: 3.0, color: Colors.black, offset: Offset(1, 1)),
-                        ],
+                child: IgnorePointer(
+                  child: Center(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _subBg ? Colors.black.withValues(alpha: 0.6) : Colors.transparent,
+                        borderRadius: BorderRadius.circular(6),
                       ),
-                      textAlign: TextAlign.center,
+                      child: Text(
+                        _currentSubtitleText!,
+                        style: TextStyle(
+                          color: Color(_subColor),
+                          fontSize: _subFontSize,
+                          fontWeight: FontWeight.w600,
+                          shadows: const [
+                            Shadow(blurRadius: 3.0, color: Colors.black, offset: Offset(1, 1)),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
                 ),
@@ -1720,6 +1820,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
             ),
 
             // Landscape Right Side Drawer for Quality, Audio, Subtitles, Episodes, Anime4K
+            if (_activeSideDrawer != _ActiveSideDrawer.none)
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => setState(() => _activeSideDrawer = _ActiveSideDrawer.none),
+                ),
+              ),
             _buildRightSideDrawer(),
           ],
         ),
@@ -1755,15 +1862,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
           height: 90,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.black.withValues(alpha: 0.7),
-            border: Border.all(color: AppTheme.accentGreen, width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.accentGreen.withValues(alpha: 0.3),
-                blurRadius: 16,
-                spreadRadius: 2,
-              ),
-            ],
+            color: Colors.black.withValues(alpha: 0.25),
+            border: Border.all(color: AppTheme.accentGreen.withValues(alpha: 0.6), width: 1),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -1786,43 +1886,41 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildGestureHud() {
-    return Center(
-      child: IgnorePointer(
-        child: Container(
-          width: 160,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          decoration: BoxDecoration(
-            color: Colors.black.withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(_hudIcon, color: AppTheme.accentGreen, size: 36),
-              const SizedBox(height: 6),
-              Text(
-                _hudTitle,
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                _hudValue,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-              ),
-              if (_hudProgress != null) ...[
-                const SizedBox(height: 10),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: _hudProgress!.clamp(0.0, 1.0),
-                    backgroundColor: Colors.white24,
-                    color: AppTheme.accentGreen,
-                    minHeight: 4,
-                  ),
+    return Positioned(
+      top: 10,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: IgnorePointer(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(_hudIcon, color: AppTheme.accentGreen, size: 14),
+                const SizedBox(width: 6),
+                Text(
+                  _hudTitle.isEmpty ? _hudValue : '$_hudTitle  $_hudValue',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 11),
                 ),
+                if (_hudProgress != null) ...[
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 60,
+                    child: LinearProgressIndicator(
+                      value: _hudProgress!.clamp(0.0, 1.0),
+                      backgroundColor: Colors.white24,
+                      color: AppTheme.accentGreen,
+                      minHeight: 2,
+                    ),
+                  ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -1831,24 +1929,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _buildLongPressSpeedPill() {
     return Positioned(
-      top: 24,
+      top: 10,
       left: 0,
       right: 0,
       child: Center(
         child: IgnorePointer(
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.85),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: AppTheme.accentGreen, width: 1.5),
-              boxShadow: [
-                BoxShadow(
-                  color: AppTheme.accentGreen.withValues(alpha: 0.3),
-                  blurRadius: 14,
-                  spreadRadius: 2,
-                ),
-              ],
+              color: Colors.black.withValues(alpha: 0.28),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -1919,9 +2009,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
             // Dedicated PiP Button
             IconButton(
-              icon: const Icon(
+              icon: Icon(
                 Icons.picture_in_picture_alt_outlined,
-                color: Colors.white70,
+                color: AppTheme.accentGreen,
                 size: 20,
               ),
               tooltip: 'Picture-in-Picture',
@@ -1954,7 +2044,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
             // 3. Dedicated Episodes Button
             if (widget.subjectType == 2 || _seasons.isNotEmpty)
               IconButton(
-                icon: const Icon(Icons.video_library_outlined, color: Colors.white70, size: 20),
+                icon: Icon(Icons.video_library_outlined, color: AppTheme.accentGreen, size: 20),
                 tooltip: 'Episodes',
                 onPressed: _showEpisodesPicker,
               ),
@@ -2002,7 +2092,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
             // 6. Unified Player & Gesture Settings Button
             IconButton(
-              icon: const Icon(Icons.tune, color: Colors.white70, size: 20),
+              icon: Icon(Icons.tune, color: AppTheme.accentGreen, size: 20),
               tooltip: 'Player Settings',
               onPressed: _openPlayerSettings,
             ),
@@ -2018,7 +2108,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
       children: [
         IconButton(
           iconSize: 42,
-          icon: const Icon(Icons.replay_10, color: Colors.white),
+          icon: Icon(Icons.replay_10, color: AppTheme.accentGreen),
           onPressed: () => _seekRelative(-_seekDurationX),
         ),
         const SizedBox(width: 32),
@@ -2039,7 +2129,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
         const SizedBox(width: 32),
         IconButton(
           iconSize: 42,
-          icon: const Icon(Icons.forward_10, color: Colors.white),
+          icon: Icon(Icons.forward_10, color: AppTheme.accentGreen),
           onPressed: () => _seekRelative(_seekDurationX),
         ),
       ],

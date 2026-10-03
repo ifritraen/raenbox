@@ -55,7 +55,6 @@ class PlayerSettingsSheet extends StatefulWidget {
 }
 
 class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
-  late String _selectedResolution;
   late String _doubleTapLayout;
   late int _seekDurationX;
   late int _seekDurationY;
@@ -66,7 +65,6 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
   @override
   void initState() {
     super.initState();
-    _selectedResolution = widget.currentResolution;
     _doubleTapLayout = widget.storage.playerDoubleTapLayout;
     _seekDurationX = widget.storage.playerSeekDurationX;
     _seekDurationY = widget.storage.playerSeekDurationY;
@@ -129,37 +127,6 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 children: [
-                  // 1. Video Quality Section
-                  _buildSectionHeader('Video Quality', Icons.hd_outlined),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: widget.availableResolutions.map((res) {
-                      final isSelected = res == _selectedResolution;
-                      return ChoiceChip(
-                        selected: isSelected,
-                        selectedColor: AppTheme.accentGreen.withValues(alpha: 0.25),
-                        backgroundColor: AppTheme.bgCard,
-                        side: BorderSide(
-                          color: isSelected ? AppTheme.accentGreen : AppTheme.borderSubtle,
-                        ),
-                        label: Text(
-                          'p Full HD',
-                          style: TextStyle(
-                            color: isSelected ? AppTheme.accentGreen : Colors.white70,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 12,
-                          ),
-                        ),
-                        onSelected: (_) {
-                          setState(() => _selectedResolution = res);
-                          widget.onResolutionChanged(res);
-                        },
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 20),
 
                   // 2. Anime4K Visual Enhancement & Color Profiles
                   _buildSectionHeader('Visual Enhancements', Icons.auto_awesome),

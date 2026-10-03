@@ -24,6 +24,8 @@ class LocalStreamProxy {
   HttpServer? _server;
   int? _port;
   final HttpClient _client = HttpClient()
+    ..idleTimeout = const Duration(seconds: 90)
+    ..connectionTimeout = const Duration(seconds: 15)
     ..badCertificateCallback = ((cert, host, port) => true);
 
   final Map<String, StreamSession> _sessions = {};

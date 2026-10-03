@@ -8,6 +8,8 @@ class PipService {
   static final ValueNotifier<bool> inPipNotifier = ValueNotifier<bool>(false);
   static bool _isInitialized = false;
 
+  static VoidCallback? onPauseRequested;
+
   static void init() {
     if (_isInitialized) return;
     _isInitialized = true;
@@ -15,6 +17,8 @@ class PipService {
       if (call.method == 'onPiPChanged') {
         final bool inPip = call.arguments as bool? ?? false;
         inPipNotifier.value = inPip;
+      } else if (call.method == 'pauseOnHomePiP') {
+        onPauseRequested?.call();
       }
     });
   }

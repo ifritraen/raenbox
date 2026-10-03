@@ -25,6 +25,8 @@ class MeScreen extends StatefulWidget {
 class _MeScreenState extends State<MeScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   String _selectedCategory = 'All';
+  bool _isHistorySelectMode = false;
+  final Set<String> _selectedHistoryIds = {};
 
 
   @override
@@ -905,83 +907,210 @@ class _MeScreenState extends State<MeScreen> with SingleTickerProviderStateMixin
       );
     }
 
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: history.length,
-      itemBuilder: (context, index) {
-        final item = history[index];
-        return GestureDetector(
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => DetailScreen(
-                  subjectId: item.subjectId,
-                  apiService: widget.apiService,
+    final allSelected = history.isNotEmpty && _selectedHistoryIds.length == history.length;
+
+    return Column(
+      children: [
+        // Action toolbar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          color: AppTheme.bgSecondary.withValues(alpha: 0.5),
+          child: Row(
+            children: [
+              if (_isHistorySelectMode) ...[
+                Text(
+                  '${_selectedHistoryIds.length} / ${history.length} selected',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                 ),
-              ),
-            );
-          },
-          child: Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppTheme.bgCard,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.borderSubtle),
-            ),
-            child: Row(
-              children: [
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: SizedBox(
-                    width: 50,
-                    height: 70,
-                    child: item.coverUrl != null
-                        ? CachedNetworkImage(
-                            imageUrl: item.coverUrl!,
-                            fit: BoxFit.cover,
-                            memCacheWidth: 150,
-                            memCacheHeight: 210,
-                          )
-                        : Container(color: AppTheme.bgSurface),
+                const Spacer(),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      if (allSelected) {
+                        _selectedHistoryIds.clear();
+                      } else {
+                        _selectedHistoryIds.addAll(history.map((e) => e.subjectId));
+                      }
+                    });
+                  },
+                  child: Text(allSelected ? 'Deselect All' : 'Select All', style: TextStyle(color: AppTheme.accentGreen, fontSize: 12)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _isHistorySelectMode = false;
+                      _selectedHistoryIds.clear();
+                    });
+                  },
+                  child: const Text('Cancel', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                ),
+                if (_selectedHistoryIds.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 20),
+                    tooltip: 'Delete Selected',
+                    onPressed: () async {
+                      await widget.storage.removeMultipleWatchHistory(_selectedHistoryIds);
+                      setState(() {
+                        _selectedHistoryIds.clear();
+                        _isHistorySelectMode = false;
+                      });
+                    },
                   ),
+              ] else ...[
+                Text('${history.length} items', style: const TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+                const Spacer(),
+                TextButton.icon(
+                  icon: const Icon(Icons.delete_sweep_outlined, size: 16, color: Colors.white60),
+                  label: const Text('Clear All', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  onPressed: () async {
+                    final confirm = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: AppTheme.bgSecondary,
+                        title: const Text('Clear History?', style: TextStyle(color: Colors.white)),
+                        content: const Text('Are you sure you want to remove all watch history records?', style: TextStyle(color: Colors.white70)),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(false),
+                            child: const Text('Cancel', style: TextStyle(color: Colors.white60)),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.of(ctx).pop(true),
+                            child: const Text('Clear All', style: TextStyle(color: Colors.redAccent)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirm == true) {
+                      await widget.storage.clearWatchHistory();
+                      setState(() {});
+                    }
+                  },
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        item.title,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
+              ],
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            itemCount: history.length,
+            itemBuilder: (context, index) {
+              final item = history[index];
+              final isSelected = _selectedHistoryIds.contains(item.subjectId);
+              return GestureDetector(
+                onLongPress: () {
+                  setState(() {
+                    _isHistorySelectMode = true;
+                    _selectedHistoryIds.add(item.subjectId);
+                  });
+                },
+                onTap: () {
+                  if (_isHistorySelectMode) {
+                    setState(() {
+                      if (isSelected) {
+                        _selectedHistoryIds.remove(item.subjectId);
+                        if (_selectedHistoryIds.isEmpty) _isHistorySelectMode = false;
+                      } else {
+                        _selectedHistoryIds.add(item.subjectId);
+                      }
+                    });
+                  } else {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DetailScreen(
+                          subjectId: item.subjectId,
+                          apiService: widget.apiService,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 6),
-                      LinearProgressIndicator(
-                        value: item.progressPercent,
-                        backgroundColor: AppTheme.bgSurface,
-                        color: AppTheme.accentGreen,
+                    );
+                  }
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppTheme.accentGreen.withValues(alpha: 0.12) : AppTheme.bgCard,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isSelected ? AppTheme.accentGreen : AppTheme.borderSubtle,
+                      width: isSelected ? 1.5 : 0.8,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      if (_isHistorySelectMode) ...[
+                        Icon(
+                          isSelected ? Icons.check_circle_rounded : Icons.radio_button_unchecked_rounded,
+                          color: isSelected ? AppTheme.accentGreen : Colors.white38,
+                          size: 22,
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: SizedBox(
+                          width: 48,
+                          height: 64,
+                          child: item.coverUrl != null
+                              ? CachedNetworkImage(
+                                  imageUrl: item.coverUrl!,
+                                  fit: BoxFit.cover,
+                                  memCacheWidth: 150,
+                                  memCacheHeight: 210,
+                                )
+                              : Container(color: AppTheme.bgSurface),
+                        ),
                       ),
-                      const SizedBox(height: 6),
-                      Text(
-                        'Watched ${(item.progressPercent * 100).toInt()}%',
-                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              item.title,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const SizedBox(height: 6),
+                            LinearProgressIndicator(
+                              value: item.progressPercent,
+                              backgroundColor: AppTheme.bgSurface,
+                              color: AppTheme.accentGreen,
+                              minHeight: 3,
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Watched ${(item.progressPercent * 100).toInt()}%',
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                            ),
+                          ],
+                        ),
                       ),
+                      const SizedBox(width: 8),
+                      if (!_isHistorySelectMode) ...[
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white54, size: 18),
+                          tooltip: 'Remove',
+                          onPressed: () async {
+                            await widget.storage.removeWatchHistory(item.subjectId);
+                            setState(() {});
+                          },
+                        ),
+                      ],
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
-                Icon(Icons.play_circle_fill, color: AppTheme.accentGreen, size: 28),
-              ],
-            ),
+              );
+            },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
 }

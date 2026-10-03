@@ -201,7 +201,7 @@ class LocalStorageService extends ChangeNotifier {
   }
 
   // Wake Lock Setting
-  bool get isKeepScreenAwake => _prefs?.getBool(_keyKeepScreenAwake) ?? false;
+  bool get isKeepScreenAwake => _prefs?.getBool(_keyKeepScreenAwake) ?? true;
 
   Future<void> setKeepScreenAwake(bool enabled) async {
     await _prefs?.setBool(_keyKeepScreenAwake, enabled);
@@ -213,6 +213,27 @@ class LocalStorageService extends ChangeNotifier {
     final raw = _prefs?.getStringList(_keyHistory) ?? [];
     return raw.map((e) => LocalRecord.fromJson(json.decode(e))).toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+  }
+
+  Future<void> removeWatchHistory(String subjectId) async {
+    final list = getWatchHistory();
+    list.removeWhere((item) => item.subjectId == subjectId);
+    final jsonList = list.map((e) => json.encode(e.toJson())).toList();
+    await _prefs?.setStringList(_keyHistory, jsonList);
+    notifyListeners();
+  }
+
+  Future<void> removeMultipleWatchHistory(Set<String> subjectIds) async {
+    final list = getWatchHistory();
+    list.removeWhere((item) => subjectIds.contains(item.subjectId));
+    final jsonList = list.map((e) => json.encode(e.toJson())).toList();
+    await _prefs?.setStringList(_keyHistory, jsonList);
+    notifyListeners();
+  }
+
+  Future<void> clearWatchHistory() async {
+    await _prefs?.remove(_keyHistory);
+    notifyListeners();
   }
 
   Future<void> saveWatchProgress({

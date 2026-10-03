@@ -34,9 +34,6 @@ class MainActivity : FlutterActivity() {
                             }
                             val builder = PictureInPictureParams.Builder()
                                 .setAspectRatio(pipAspectRatio)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                builder.setAutoEnterEnabled(isAutoPiPEnabled)
-                            }
                             val params = builder.build()
                             val entered = enterPictureInPictureMode(params)
                             result.success(entered)
@@ -54,9 +51,6 @@ class MainActivity : FlutterActivity() {
                         try {
                             val builder = PictureInPictureParams.Builder()
                                 .setAspectRatio(pipAspectRatio)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                builder.setAutoEnterEnabled(enabled)
-                            }
                             setPictureInPictureParams(builder.build())
                         } catch (_: Exception) {}
                     }
@@ -86,10 +80,8 @@ class MainActivity : FlutterActivity() {
             try {
                 val builder = PictureInPictureParams.Builder()
                     .setAspectRatio(pipAspectRatio)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    builder.setAutoEnterEnabled(true)
-                }
                 enterPictureInPictureMode(builder.build())
+                methodChannel?.invokeMethod("pauseOnHomePiP", null)
             } catch (_: Exception) {}
         }
     }
