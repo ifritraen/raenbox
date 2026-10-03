@@ -71,6 +71,7 @@ class MovieBoxApp extends StatelessWidget {
       ),
       builder: (context, child) {
         return MaterialApp(
+          navigatorKey: MiniplayerService.navigatorKey,
           title: 'RaenBox',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.buildTheme(storage.activeThemePreset, isPureOled: storage.isPureOled),

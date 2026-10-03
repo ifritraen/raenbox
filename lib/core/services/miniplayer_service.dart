@@ -11,6 +11,7 @@ import 'pip_service.dart';
 class MiniplayerService {
   MiniplayerService._();
   static final MiniplayerService instance = MiniplayerService._();
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   Player? player;
   VideoController? videoController;
@@ -195,7 +196,8 @@ class MiniplayerService {
     _clearSubscriptions();
     isActiveNotifier.value = false;
 
-    Navigator.of(context).push(
+    final nav = navigatorKey.currentState ?? Navigator.of(context, rootNavigator: true);
+    nav.push(
       MaterialPageRoute(
         builder: (_) => PlayerScreen(
           subjectId: sid,
