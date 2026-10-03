@@ -44,10 +44,10 @@ class _MiniplayerWidgetState extends State<MiniplayerWidget> {
     return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
-  Widget _buildCornerHandle({
+  // Horizontal edge resize handle (left or right side middle)
+  Widget _buildVerticalSideHandle({
     required Alignment alignment,
     required void Function(DragUpdateDetails) onPanUpdate,
-    required IconData icon,
   }) {
     return Align(
       alignment: alignment,
@@ -58,15 +58,48 @@ class _MiniplayerWidgetState extends State<MiniplayerWidget> {
         onPanEnd: (_) => setState(() => _isResizing = false),
         onPanCancel: () => setState(() => _isResizing = false),
         child: Container(
-          width: 28,
-          height: 28,
-          color: Colors.transparent,
+          width: 14,
+          height: 38,
           alignment: alignment,
-          padding: const EdgeInsets.all(3),
-          child: Icon(
-            icon,
-            size: 11,
-            color: _isResizing ? AppTheme.accentGreen : Colors.white54,
+          color: Colors.transparent,
+          child: Container(
+            width: 3.5,
+            height: 24,
+            decoration: BoxDecoration(
+              color: _isResizing ? AppTheme.accentGreen : Colors.white60,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Vertical edge resize handle (top or bottom side middle)
+  Widget _buildHorizontalSideHandle({
+    required Alignment alignment,
+    required void Function(DragUpdateDetails) onPanUpdate,
+  }) {
+    return Align(
+      alignment: alignment,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (_) => setState(() => _isResizing = true),
+        onPanUpdate: onPanUpdate,
+        onPanEnd: (_) => setState(() => _isResizing = false),
+        onPanCancel: () => setState(() => _isResizing = false),
+        child: Container(
+          width: 38,
+          height: 14,
+          alignment: alignment,
+          color: Colors.transparent,
+          child: Container(
+            width: 24,
+            height: 3.5,
+            decoration: BoxDecoration(
+              color: _isResizing ? AppTheme.accentGreen : Colors.white60,
+              borderRadius: BorderRadius.circular(2),
+            ),
           ),
         ),
       ),
@@ -200,7 +233,7 @@ class _MiniplayerWidgetState extends State<MiniplayerWidget> {
                     ),
                   ),
 
-                  // Single-line Bottom Controls: [Play/Pause] | [Seekbar] | [Time]
+                  // Single-line Bottom Controls: [Play/Pause] and [Time Spent] (No Seekbar)
                   AnimatedOpacity(
                     opacity: _showControls ? 1.0 : 0.0,
                     duration: const Duration(milliseconds: 200),
@@ -208,7 +241,7 @@ class _MiniplayerWidgetState extends State<MiniplayerWidget> {
                       alignment: Alignment.bottomCenter,
                       child: Container(
                         height: 28,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
                         decoration: BoxDecoration(
                           gradient: LinearGradient(
                             begin: Alignment.bottomCenter,
@@ -219,138 +252,108 @@ class _MiniplayerWidgetState extends State<MiniplayerWidget> {
                             ],
                           ),
                         ),
-                        child: Row(
-                          children: [
-                            // Play / Pause Button
-                            ValueListenableBuilder<bool>(
-                              valueListenable: service.isPlayingNotifier,
-                              builder: (context, isPlaying, _) {
-                                return GestureDetector(
-                                  behavior: HitTestBehavior.opaque,
-                                  onTap: () {
-                                    service.playOrPause();
-                                    _startHideTimer();
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.all(2),
-                                    child: Icon(
-                                      isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                      color: AppTheme.accentGreen,
-                                      size: 18,
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                            // Thin Seekbar
-                            Expanded(
-                              child: ValueListenableBuilder<Duration>(
-                                valueListenable: service.durationNotifier,
-                                builder: (context, duration, _) {
-                                  return ValueListenableBuilder<Duration>(
-                                    valueListenable: service.positionNotifier,
-                                    builder: (context, position, _) {
-                                      final maxMs = duration.inMilliseconds > 0
-                                          ? duration.inMilliseconds.toDouble()
-                                          : (service.currentStream?.duration != null && service.currentStream!.duration > 0
-                                              ? service.currentStream!.duration * 1000.0
-                                              : 1.0);
-                                      final valMs = position.inMilliseconds.clamp(0, maxMs.toInt()).toDouble();
-
-                                      return SliderTheme(
-                                        data: SliderTheme.of(context).copyWith(
-                                          trackHeight: 2,
-                                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4),
-                                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 8),
-                                          activeTrackColor: AppTheme.accentGreen,
-                                          inactiveTrackColor: Colors.white24,
-                                          thumbColor: AppTheme.accentGreen,
-                                        ),
-                                        child: Slider(
-                                          value: valMs,
-                                          min: 0,
-                                          max: maxMs,
-                                          onChanged: (val) {
-                                            service.seek(Duration(milliseconds: val.toInt()));
-                                            _startHideTimer();
-                                          },
-                                        ),
-                                      );
+                        child: DefaultTextStyle(
+                          style: const TextStyle(
+                            decoration: TextDecoration.none,
+                            decorationColor: Colors.transparent,
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              // Play / Pause Button
+                              ValueListenableBuilder<bool>(
+                                valueListenable: service.isPlayingNotifier,
+                                builder: (context, isPlaying, _) {
+                                  return GestureDetector(
+                                    behavior: HitTestBehavior.opaque,
+                                    onTap: () {
+                                      service.playOrPause();
+                                      _startHideTimer();
                                     },
+                                    child: Container(
+                                      padding: const EdgeInsets.all(2),
+                                      child: Icon(
+                                        isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                        color: AppTheme.accentGreen,
+                                        size: 18,
+                                      ),
+                                    ),
                                   );
                                 },
                               ),
-                            ),
-                            // Time Spent
-                            ValueListenableBuilder<Duration>(
-                              valueListenable: service.positionNotifier,
-                              builder: (context, pos, _) {
-                                return Text(
-                                  _formatDuration(pos),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w600,
-                                    fontFeatures: [FontFeature.tabularFigures()],
-                                  ),
-                                );
-                              },
-                            ),
-                            const SizedBox(width: 8),
-                          ],
+                              // Time Spent (explicit Material text theme to avoid yellow underline artifact)
+                              ValueListenableBuilder<Duration>(
+                                valueListenable: service.positionNotifier,
+                                builder: (context, pos, _) {
+                                  return Text(
+                                    _formatDuration(pos),
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w600,
+                                      decoration: TextDecoration.none,
+                                      fontFeatures: [FontFeature.tabularFigures()],
+                                    ),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
 
-                  // 4-Corner Resize Handles
-                  // Top-Left
-                  _buildCornerHandle(
-                    alignment: Alignment.topLeft,
-                    icon: Icons.north_west_rounded,
+                  // 4-Side Middle Thicker Resize Handles
+                  // Left Side Middle
+                  _buildVerticalSideHandle(
+                    alignment: Alignment.centerLeft,
                     onPanUpdate: (details) {
                       setState(() {
                         final newW = (_width - details.delta.dx).clamp(minW, maxW);
                         final dw = newW - _width;
                         _width = newW;
                         _x = (_x ?? clampedX) - dw;
-                        _y = (_y ?? clampedY) - (dw * 9 / 16);
+                        _y = (_y ?? clampedY) - (dw * 9 / 32);
                       });
                     },
                   ),
-                  // Top-Right
-                  _buildCornerHandle(
-                    alignment: Alignment.topRight,
-                    icon: Icons.north_east_rounded,
+                  // Right Side Middle
+                  _buildVerticalSideHandle(
+                    alignment: Alignment.centerRight,
                     onPanUpdate: (details) {
                       setState(() {
                         final newW = (_width + details.delta.dx).clamp(minW, maxW);
                         final dw = newW - _width;
                         _width = newW;
+                        _y = (_y ?? clampedY) - (dw * 9 / 32);
+                      });
+                    },
+                  ),
+                  // Top Side Middle
+                  _buildHorizontalSideHandle(
+                    alignment: Alignment.topCenter,
+                    onPanUpdate: (details) {
+                      setState(() {
+                        final deltaW = -details.delta.dy * (16 / 9);
+                        final newW = (_width + deltaW).clamp(minW, maxW);
+                        final dw = newW - _width;
+                        _width = newW;
+                        _x = (_x ?? clampedX) - (dw / 2);
                         _y = (_y ?? clampedY) - (dw * 9 / 16);
                       });
                     },
                   ),
-                  // Bottom-Left
-                  _buildCornerHandle(
-                    alignment: Alignment.bottomLeft,
-                    icon: Icons.south_west_rounded,
+                  // Bottom Side Middle
+                  _buildHorizontalSideHandle(
+                    alignment: Alignment.bottomCenter,
                     onPanUpdate: (details) {
                       setState(() {
-                        final newW = (_width - details.delta.dx).clamp(minW, maxW);
+                        final deltaW = details.delta.dy * (16 / 9);
+                        final newW = (_width + deltaW).clamp(minW, maxW);
                         final dw = newW - _width;
                         _width = newW;
-                        _x = (_x ?? clampedX) - dw;
-                      });
-                    },
-                  ),
-                  // Bottom-Right
-                  _buildCornerHandle(
-                    alignment: Alignment.bottomRight,
-                    icon: Icons.south_east_rounded,
-                    onPanUpdate: (details) {
-                      setState(() {
-                        _width = (_width + details.delta.dx).clamp(minW, maxW);
+                        _x = (_x ?? clampedX) - (dw / 2);
                       });
                     },
                   ),

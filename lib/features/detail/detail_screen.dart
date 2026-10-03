@@ -56,7 +56,7 @@ class DetailScreen extends StatefulWidget {
   State<DetailScreen> createState() => _DetailScreenState();
 }
 
-class _DetailScreenState extends State<DetailScreen> {
+class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver {
   bool _isLoading = true;
   String? _errorMessage;
   MediaDetail? _detail;
@@ -135,7 +135,18 @@ class _DetailScreenState extends State<DetailScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadData();
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted || _isFullscreen || _player == null || _currentStream == null) return;
+    final size = WidgetsBinding.instance.platformDispatcher.views.first.physicalSize;
+    if (size.width > size.height && !_isFullscreen) {
+      _openFullscreenPlayer();
+    }
   }
 
   void _saveWatchProgress() {
@@ -161,6 +172,7 @@ class _DetailScreenState extends State<DetailScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _progressTimer?.cancel();
     _saveWatchProgress();
     _controlsTimer?.cancel();
@@ -2759,6 +2771,10 @@ class _DetailScreenState extends State<DetailScreen> {
   Widget _buildRecommendationCard(MediaItem rec) {
     return GestureDetector(
       onTap: () {
+        _player?.pause();
+        if (MiniplayerService.instance.isActive) {
+          MiniplayerService.instance.close();
+        }
         Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => DetailScreen(
