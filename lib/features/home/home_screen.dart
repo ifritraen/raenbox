@@ -39,8 +39,9 @@ class _ActiveCategoryQuery {
   final String? year;
   final String? classify;
   final String? sort;
+  final _ActiveCategoryQuery? fallbackQuery;
 
-  const _ActiveCategoryQuery.rankingList(this.rankingListId)
+  const _ActiveCategoryQuery.rankingList(this.rankingListId, {this.fallbackQuery})
       : type = _QueryType.rankingList,
         searchKeyword = null,
         channelId = null,
@@ -50,7 +51,7 @@ class _ActiveCategoryQuery {
         classify = null,
         sort = null;
 
-  const _ActiveCategoryQuery.search(this.searchKeyword)
+  const _ActiveCategoryQuery.search(this.searchKeyword, {this.fallbackQuery})
       : type = _QueryType.searchKeyword,
         rankingListId = null,
         channelId = null,
@@ -67,6 +68,7 @@ class _ActiveCategoryQuery {
     this.year,
     this.classify,
     this.sort,
+    this.fallbackQuery,
   })  : type = _QueryType.subjectFilter,
         rankingListId = null,
         searchKeyword = null;
@@ -592,8 +594,10 @@ class HomeScreenState extends State<HomeScreen> {
 
   void _onGridScroll(_CategoryTabState tab) {
     if (!tab.gridScrollController.hasClients) return;
-    if (tab.gridScrollController.position.pixels >=
-        tab.gridScrollController.position.maxScrollExtent - 450) {
+    final maxScroll = tab.gridScrollController.position.maxScrollExtent;
+    final current = tab.gridScrollController.position.pixels;
+    final triggerThreshold = (maxScroll - 400).clamp(50.0, double.infinity);
+    if (current >= triggerThreshold) {
       if (!tab.isRailsMode && !tab.isLoading && !tab.isLoadingMore && tab.hasMorePagedItems) {
         _loadMorePagedItems(tab);
       }
@@ -853,7 +857,7 @@ class HomeScreenState extends State<HomeScreen> {
       title: title,
       items: items,
       onAll: () => _applyPillFilter(tab, title),
-      genreTopId: genreTopId.isNotEmpty ? genreTopId : null,
+      genreTopId: (opType == 'PLAY_LIST' && genreTopId.isNotEmpty) ? genreTopId : null,
     );
   }
 
@@ -1238,7 +1242,7 @@ class HomeScreenState extends State<HomeScreen> {
             title: title,
             items: sectionItems,
             onAll: () => _applyPillFilter(tab, title),
-            genreTopId: genreTopId.isNotEmpty ? genreTopId : null,
+            genreTopId: (type == 'PLAY_LIST' && genreTopId.isNotEmpty) ? genreTopId : null,
           ));
         }
       }
@@ -2164,6 +2168,73 @@ class HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  _ActiveCategoryQuery _resolveCatalogFallback(_CategoryTabState tab) {
+    final catalog = widget.storage.activeCatalog;
+    switch (tab.index) {
+      case 0: // Home Tab
+        return const _ActiveCategoryQuery.filter(channelId: '1', sort: 'Popular');
+      case 1: // Trending Tab
+        return const _ActiveCategoryQuery.filter(channelId: '1', sort: 'ForYou');
+      case 2: // Movie Tab
+        String? c;
+        String? cls;
+        final pLower = tab.selectedPill.toLowerCase();
+        if (pLower.contains('bangla') || pLower.contains('bengali')) {
+          c = 'Bangladesh';
+          cls = 'Bengali dub';
+        } else if (pLower.contains('bollywood') || pLower.contains('hindi')) {
+          c = 'India';
+          cls = 'Hindi dub';
+        } else if (pLower.contains('south indian') || pLower.contains('tamil') || pLower.contains('telugu')) {
+          c = 'India';
+        } else if (pLower.contains('hollywood')) {
+          c = 'United States';
+        } else if (catalog.defaultCountry != null) {
+          c = catalog.defaultCountry;
+          cls = catalog.classify;
+        }
+        return _ActiveCategoryQuery.filter(
+          channelId: '1',
+          country: c ?? 'All',
+          classify: cls ?? 'All',
+          sort: 'Popular',
+        );
+      case 3: // TV Tab
+        String? c;
+        final pLower = tab.selectedPill.toLowerCase();
+        if (pLower.contains('bangla') || pLower.contains('bengali')) {
+          c = 'Bangladesh';
+        } else if (pLower.contains('k-drama') || pLower.contains('korea')) {
+          c = 'Korea';
+        } else if (pLower.contains('c-drama') || pLower.contains('china')) {
+          c = 'China';
+        } else if (pLower.contains('turkish') || pLower.contains('turkey')) {
+          c = 'Turkey';
+        } else if (pLower.contains('pakistan')) {
+          c = 'Pakistan';
+        } else if (pLower.contains('western') || pLower.contains('hollywood') || pLower.contains('us drama')) {
+          c = 'United States';
+        } else if (pLower.contains('indian') || pLower.contains('hindi')) {
+          c = 'India';
+        } else if (catalog.defaultCountry != null) {
+          c = catalog.defaultCountry;
+        }
+        return _ActiveCategoryQuery.filter(
+          channelId: '2',
+          country: c ?? 'All',
+          sort: 'Popular',
+        );
+      case 4: // MidNight🔞 Tab
+        return const _ActiveCategoryQuery.search('18+');
+      case 5: // Anime Tab
+        return const _ActiveCategoryQuery.filter(channelId: '1006', sort: 'Popular');
+      case 6: // ShortTV Tab
+        return const _ActiveCategoryQuery.search('Short Drama');
+      default:
+        return const _ActiveCategoryQuery.filter(channelId: '1', sort: 'Popular');
+    }
+  }
+
   _ActiveCategoryQuery _resolveTabQuery(_CategoryTabState tab) {
     final catalog = widget.storage.activeCatalog;
     String channelId = '1';
@@ -2179,7 +2250,10 @@ class HomeScreenState extends State<HomeScreen> {
           if (cs.title.toLowerCase().contains(tab.selectedPill.toLowerCase()) ||
               tab.selectedPill.toLowerCase().contains(cs.title.toLowerCase())) {
             if (cs.keyword != null && cs.keyword!.isNotEmpty) {
-              return _ActiveCategoryQuery.search(cs.keyword!);
+              return _ActiveCategoryQuery.search(
+                cs.keyword!,
+                fallbackQuery: const _ActiveCategoryQuery.filter(channelId: '1', sort: 'Popular'),
+              );
             } else {
               String ch = '1';
               if (cs.type == 'tv') ch = '2';
@@ -2194,7 +2268,10 @@ class HomeScreenState extends State<HomeScreen> {
             }
           }
         }
-        return _ActiveCategoryQuery.search(tab.selectedPill);
+        return _ActiveCategoryQuery.search(
+          tab.selectedPill,
+          fallbackQuery: const _ActiveCategoryQuery.filter(channelId: '1', sort: 'Popular'),
+        );
 
       case 1: // Trending Tab
         final pLower = tab.selectedPill.toLowerCase();
@@ -2215,12 +2292,29 @@ class HomeScreenState extends State<HomeScreen> {
         } else if (pLower.contains('short')) {
           return const _ActiveCategoryQuery.search('Short Drama');
         }
-        return _ActiveCategoryQuery.search(tab.selectedPill);
+        if (tab.selectedPill == 'All' || tab.selectedPill == 'Trending' || tab.selectedPill == 'Trending Highlights') {
+          return const _ActiveCategoryQuery.filter(channelId: '1', sort: 'ForYou');
+        }
+        return _ActiveCategoryQuery.search(
+          tab.selectedPill,
+          fallbackQuery: const _ActiveCategoryQuery.filter(channelId: '1', sort: 'ForYou'),
+        );
 
       case 2: // Movie Tab
         channelId = '1';
         if (tab.selectedPill != 'All') {
-          if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
+          final pLower = tab.selectedPill.toLowerCase();
+          if (pLower.contains('bangla') || pLower.contains('bengali')) {
+            country = 'Bangladesh';
+            classify = 'Bengali dub';
+          } else if (pLower.contains('bollywood') || pLower.contains('hindi')) {
+            country = 'India';
+            classify = 'Hindi dub';
+          } else if (pLower.contains('south indian') || pLower.contains('tamil') || pLower.contains('telugu')) {
+            country = 'India';
+          } else if (pLower.contains('hollywood')) {
+            country = 'United States';
+          } else if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
             if (catalog.classify != null) classify = catalog.classify!;
             if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
           } else if (tab.selectedPill == 'Trending in Cinema') {
@@ -2239,7 +2333,10 @@ class HomeScreenState extends State<HomeScreen> {
           } else if (tab.selectedPill == 'Thrills & Crimes') {
             genre = 'Thriller';
           } else if (tab.selectedPill == 'Super Hero') {
-            return const _ActiveCategoryQuery.search('Superhero');
+            return const _ActiveCategoryQuery.search(
+              'Superhero',
+              fallbackQuery: _ActiveCategoryQuery.filter(channelId: '1', genre: 'Action'),
+            );
           } else if (tab.selectedPill == 'Sci-Fi Future') {
             genre = 'Sci-Fi';
           }
@@ -2256,29 +2353,33 @@ class HomeScreenState extends State<HomeScreen> {
       case 3: // TV Tab
         channelId = '2';
         if (tab.selectedPill != 'All') {
-          if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
-            if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
-            if (catalog.classify != null) classify = catalog.classify!;
-          } else if (tab.selectedPill == 'K-Drama' || tab.selectedPill == 'Best Asian Dramas') {
+          final pLower = tab.selectedPill.toLowerCase();
+          if (pLower.contains('bangla') || pLower.contains('bengali')) {
+            country = 'Bangladesh';
+            classify = 'Bengali dub';
+          } else if (pLower.contains('k-drama') || pLower.contains('korea') || pLower.contains('best asian dramas')) {
             country = 'Korea';
-          } else if (tab.selectedPill == 'C-Drama') {
+          } else if (pLower.contains('c-drama') || pLower.contains('china')) {
             country = 'China';
-          } else if (tab.selectedPill == 'Turkish Drama') {
+          } else if (pLower.contains('turkish drama') || pLower.contains('turkey')) {
             country = 'Turkey';
-          } else if (tab.selectedPill == 'Pakistani TV') {
+          } else if (pLower.contains('pakistani tv') || pLower.contains('pakistan')) {
             country = 'Pakistan';
-          } else if (tab.selectedPill == 'Western TV' || tab.selectedPill == 'US Dramas') {
+          } else if (pLower.contains('western tv') || pLower.contains('us drama') || pLower.contains('hollywood')) {
             country = 'United States';
-          } else if (tab.selectedPill == 'Indian Dramas') {
+          } else if (pLower.contains('indian drama') || pLower.contains('hindi')) {
             country = 'India';
-          } else if (tab.selectedPill == 'Crime & Mystery') {
+          } else if (pLower.contains('crime') || pLower.contains('mystery')) {
             genre = 'Crime';
-          } else if (tab.selectedPill == 'Sci-Fi & Fantasy') {
+          } else if (pLower.contains('sci-fi') || pLower.contains('fantasy')) {
             genre = 'Sci-Fi';
-          } else if (tab.selectedPill == 'Comedy Shows') {
+          } else if (pLower.contains('comedy')) {
             genre = 'Comedy';
           } else if (tab.selectedPill == 'Top Series') {
             sort = 'Popular';
+          } else if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
+            if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
+            if (catalog.classify != null) classify = catalog.classify!;
           }
         }
         return _ActiveCategoryQuery.filter(
@@ -2293,34 +2394,76 @@ class HomeScreenState extends State<HomeScreen> {
       case 4: // MidNight🔞 Tab
         final p = tab.selectedPill;
         if (p == 'Vivamax' || p.toLowerCase().contains('vivamax')) {
-          return const _ActiveCategoryQuery.rankingList('8170622407217234072');
+          return const _ActiveCategoryQuery.rankingList(
+            '8170622407217234072',
+            fallbackQuery: _ActiveCategoryQuery.search('Vivamax'),
+          );
         } else if (p == 'UllU Drama' || p.toLowerCase().contains('ullu drama')) {
-          return const _ActiveCategoryQuery.rankingList('7462810956096595192');
+          return const _ActiveCategoryQuery.rankingList(
+            '7462810956096595192',
+            fallbackQuery: _ActiveCategoryQuery.search('Ullu'),
+          );
         } else if (p == 'UllU Movie' || p.toLowerCase().contains('ullu movie')) {
-          return const _ActiveCategoryQuery.rankingList('3613148068369032104');
+          return const _ActiveCategoryQuery.rankingList(
+            '3613148068369032104',
+            fallbackQuery: _ActiveCategoryQuery.search('Ullu'),
+          );
         } else if (p == '18+ Dramas' || p.toLowerCase().contains('18+ drama')) {
-          return const _ActiveCategoryQuery.rankingList('8448366367312612120');
+          return const _ActiveCategoryQuery.rankingList(
+            '8448366367312612120',
+            fallbackQuery: _ActiveCategoryQuery.search('18+'),
+          );
         } else if (p == 'Porn Top Videos' || p.toLowerCase().contains('porn top')) {
-          return const _ActiveCategoryQuery.rankingList('3436880071141867768');
+          return const _ActiveCategoryQuery.rankingList(
+            '3436880071141867768',
+            fallbackQuery: _ActiveCategoryQuery.search('Hot'),
+          );
         } else if (p == 'Late-night Shorts' || p.toLowerCase().contains('late-night')) {
-          return const _ActiveCategoryQuery.rankingList('4283712533380449360');
+          return const _ActiveCategoryQuery.rankingList(
+            '4283712533380449360',
+            fallbackQuery: _ActiveCategoryQuery.search('Shorts'),
+          );
         } else if (p == 'Hentai Anime' || p.toLowerCase().contains('hentai')) {
-          return const _ActiveCategoryQuery.rankingList('1846783103277105520');
+          return const _ActiveCategoryQuery.rankingList(
+            '1846783103277105520',
+            fallbackQuery: _ActiveCategoryQuery.search('Hentai'),
+          );
         } else if (p == 'Indian 18+' || p.toLowerCase().contains('indian 18+')) {
-          return const _ActiveCategoryQuery.rankingList('4534646032008989032');
+          return const _ActiveCategoryQuery.rankingList(
+            '4534646032008989032',
+            fallbackQuery: _ActiveCategoryQuery.search('Indian Hot'),
+          );
         } else if (p == 'Japanese 18+' || p.toLowerCase().contains('japanese 18+')) {
-          return const _ActiveCategoryQuery.rankingList('7364316894532720656');
+          return const _ActiveCategoryQuery.rankingList(
+            '7364316894532720656',
+            fallbackQuery: _ActiveCategoryQuery.search('Japanese'),
+          );
         } else if (p == 'Korea 18+' || p.toLowerCase().contains('korea 18+')) {
-          return const _ActiveCategoryQuery.rankingList('4105487575106966448');
+          return const _ActiveCategoryQuery.rankingList(
+            '4105487575106966448',
+            fallbackQuery: _ActiveCategoryQuery.search('Korean'),
+          );
         } else if (p == 'Chinese 18+' || p.toLowerCase().contains('chinese 18+')) {
-          return const _ActiveCategoryQuery.rankingList('3628141198977782704');
+          return const _ActiveCategoryQuery.rankingList(
+            '3628141198977782704',
+            fallbackQuery: _ActiveCategoryQuery.search('Chinese'),
+          );
         } else if (p == 'Tbonx' || p.toLowerCase().contains('tbonx')) {
-          return const _ActiveCategoryQuery.rankingList('4543422163096946912');
+          return const _ActiveCategoryQuery.rankingList(
+            '4543422163096946912',
+            fallbackQuery: _ActiveCategoryQuery.search('Tbonx'),
+          );
         } else if (p == 'Cinepop' || p.toLowerCase().contains('cinepop')) {
-          return const _ActiveCategoryQuery.rankingList('8805880198798493664');
+          return const _ActiveCategoryQuery.rankingList(
+            '8805880198798493664',
+            fallbackQuery: _ActiveCategoryQuery.search('Cinepop'),
+          );
         }
         if (p != 'All') {
-          return _ActiveCategoryQuery.search(p);
+          return _ActiveCategoryQuery.search(
+            p,
+            fallbackQuery: const _ActiveCategoryQuery.rankingList('8170622407217234072'),
+          );
         }
         return const _ActiveCategoryQuery.rankingList('8170622407217234072');
 
@@ -2362,16 +2505,24 @@ class HomeScreenState extends State<HomeScreen> {
         if (tab.selectedPill == 'Short Drama' || tab.selectedPill == 'Hot Short TV' || tab.selectedPill == 'All') {
           keyword = 'Short Drama';
         }
-        return _ActiveCategoryQuery.search(keyword);
+        return _ActiveCategoryQuery.search(
+          keyword,
+          fallbackQuery: const _ActiveCategoryQuery.search('Short Drama'),
+        );
 
       default:
-        return _ActiveCategoryQuery.search(tab.selectedPill);
+        return _ActiveCategoryQuery.search(
+          tab.selectedPill,
+          fallbackQuery: const _ActiveCategoryQuery.filter(channelId: '1', sort: 'Popular'),
+        );
     }
   }
 
   Future<void> _loadPagedCategory(_CategoryTabState tab, int currentToken) async {
     tab.hasMorePagedItems = true;
     _ActiveCategoryQuery? query;
+
+    final defaultFallback = _resolveTabQuery(tab);
 
     // 1. Check if user tapped a rail ("All") that exists in tab.sections
     if (tab.selectedPill != 'All') {
@@ -2386,9 +2537,9 @@ class HomeScreenState extends State<HomeScreen> {
 
       if (matchedSection != null) {
         if (matchedSection.genreTopId != null && matchedSection.genreTopId!.isNotEmpty) {
-          query = _ActiveCategoryQuery.rankingList(matchedSection.genreTopId!);
+          query = _ActiveCategoryQuery.rankingList(matchedSection.genreTopId!, fallbackQuery: defaultFallback);
         } else if (matchedSection.searchKeyword != null && matchedSection.searchKeyword!.isNotEmpty) {
-          query = _ActiveCategoryQuery.search(matchedSection.searchKeyword!);
+          query = _ActiveCategoryQuery.search(matchedSection.searchKeyword!, fallbackQuery: defaultFallback);
         } else if (matchedSection.channelId != null || matchedSection.genre != null || matchedSection.country != null) {
           query = _ActiveCategoryQuery.filter(
             channelId: matchedSection.channelId ?? (tab.index == 3 ? '2' : (tab.index == 5 ? '1006' : '1')),
@@ -2396,13 +2547,14 @@ class HomeScreenState extends State<HomeScreen> {
             country: matchedSection.country ?? 'All',
             classify: matchedSection.classify ?? 'All',
             sort: matchedSection.sort ?? (tab.index >= 4 ? 'Popular' : 'ForYou'),
+            fallbackQuery: defaultFallback,
           );
         }
       }
     }
 
     // 2. If no section query matched, resolve based on tab index and selectedPill / dropdown filters
-    query ??= _resolveTabQuery(tab);
+    query ??= defaultFallback;
     tab.activeQuery = query;
 
     // 3. Fast in-memory resolution for instant display if rail items exist
@@ -2427,7 +2579,7 @@ class HomeScreenState extends State<HomeScreen> {
         });
       }
       // If the rail only had preview items (e.g. <= 6), proactively fetch page 1 to fill out the grid
-      if (initialItems.length < 15) {
+      if (initialItems.length < 18) {
         try {
           final fetched = await _fetchItemsForQuery(query, page: 1, perPage: 18);
           if (mounted && currentToken == tab.loadToken && fetched.isNotEmpty) {
@@ -2466,32 +2618,58 @@ class HomeScreenState extends State<HomeScreen> {
   Future<void> _loadMorePagedItems(_CategoryTabState tab) async {
     if (tab.isLoadingMore || !tab.hasMorePagedItems) return;
     setState(() => tab.isLoadingMore = true);
-    tab.currentPage++;
 
-    final query = tab.activeQuery ?? _resolveTabQuery(tab);
-    tab.activeQuery = query;
+    var currentQuery = tab.activeQuery ?? _resolveTabQuery(tab);
+    final existingIds = tab.pagedItems.map((e) => e.subjectId).where((id) => id.isNotEmpty).toSet();
+    final List<MediaItem> collectedNewItems = [];
 
-    try {
-      final nextItems = await _fetchItemsForQuery(query, page: tab.currentPage, perPage: 18);
-      if (mounted) {
-        final existingIds = tab.pagedItems.map((e) => e.subjectId).toSet();
-        final uniqueItems = nextItems.where((e) => e.subjectId.isNotEmpty && existingIds.add(e.subjectId)).toList();
+    int loopAttempts = 0;
+    while (collectedNewItems.isEmpty && loopAttempts < 4 && tab.hasMorePagedItems) {
+      loopAttempts++;
+      tab.currentPage++;
 
-        if (nextItems.isEmpty || (nextItems.isNotEmpty && uniqueItems.isEmpty && tab.currentPage > 2)) {
-          tab.hasMorePagedItems = false;
-        }
+      List<MediaItem> fetched = [];
+      try {
+        fetched = await _fetchItemsForQuery(currentQuery, page: tab.currentPage, perPage: 18);
+      } catch (_) {
+        fetched = [];
+      }
 
-        setState(() {
-          if (uniqueItems.isNotEmpty) {
-            tab.pagedItems.addAll(uniqueItems);
+      final unique = fetched.where((e) => e.subjectId.isNotEmpty && existingIds.add(e.subjectId)).toList();
+      if (unique.isNotEmpty) {
+        collectedNewItems.addAll(unique);
+        break;
+      }
+
+      // If fetched returned nothing or only duplicate items:
+      if (fetched.isEmpty || unique.isEmpty) {
+        if (currentQuery.fallbackQuery != null) {
+          currentQuery = currentQuery.fallbackQuery!;
+          tab.activeQuery = currentQuery;
+          tab.currentPage = 0;
+          continue;
+        } else if (currentQuery.type != _QueryType.subjectFilter) {
+          final autoFallback = _resolveCatalogFallback(tab);
+          currentQuery = autoFallback;
+          tab.activeQuery = currentQuery;
+          tab.currentPage = 0;
+          continue;
+        } else {
+          if (fetched.isEmpty && loopAttempts >= 2) {
+            tab.hasMorePagedItems = false;
+            break;
           }
-          tab.isLoadingMore = false;
-        });
+        }
       }
-    } catch (_) {
-      if (mounted) {
-        setState(() => tab.isLoadingMore = false);
-      }
+    }
+
+    if (mounted) {
+      setState(() {
+        if (collectedNewItems.isNotEmpty) {
+          tab.pagedItems.addAll(collectedNewItems);
+        }
+        tab.isLoadingMore = false;
+      });
     }
   }
 
