@@ -128,7 +128,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final List<StreamSubscription> _subscriptions = [];
 
   late StreamLink _currentStream;
-  String _selectedResolution = '1080';
+  String _selectedResolution = 'auto';
+  String _activeQualityTier = '1080';
+  Timer? _abrTimer;
+  DateTime _lastBufferTime = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastQualitySwitchTime = DateTime.fromMillisecondsSinceEpoch(0);
+  int _consecutiveBufferingCount = 0;
   bool _showControls = true;
   bool _hasError = false;
   String _errorMessage = '';
@@ -144,6 +149,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   final ValueNotifier<bool> _pulseNotifier = ValueNotifier<bool>(false);
   bool _isPlaying = false;
   bool _isPlayerInitialized = false;
+  bool _isBuffering = false;
+  Timer? _bufferingWatchdogTimer;
 
   // Media Dubs & Episodes
   late List<Dub> _dubs;
@@ -162,16 +169,46 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _subBg = true;
   int _subColor = 0xFFFFFFFF;
 
+  bool _isCaptionEnglish(CaptionTrack c) {
+    final l = c.language.toLowerCase().trim();
+    final name = c.lanName.toLowerCase().trim();
+    return l == 'en' ||
+        l == 'eng' ||
+        l.startsWith('en-') ||
+        l.startsWith('en_') ||
+        name.contains('english') ||
+        name.contains('inglés') ||
+        name.contains('ingles') ||
+        name == 'en';
+  }
+
+  bool _isEnglishTrack(SubtitleTrack t) {
+    final l = (t.language ?? '').toLowerCase().trim();
+    final title = (t.title ?? '').toLowerCase().trim();
+    return l == 'en' ||
+        l == 'eng' ||
+        l.startsWith('en-') ||
+        l.startsWith('en_') ||
+        title.contains('english') ||
+        title.contains('eng');
+  }
+
   CaptionTrack? _pickEnglish() {
     for (final c in _currentStream.captions) {
-      final l = c.language.toLowerCase();
-      if (l == 'en' || l == 'eng' || l.startsWith('en-') || c.lanName.toLowerCase().contains('english')) {
+      if (_isCaptionEnglish(c)) {
         return c;
       }
     }
     return null;
   }
   CaptionTrack? _selectedCaption;
+  bool _hasAutoSelectedSubtitle = false;
+
+  bool get _isSubtitleActive =>
+      _selectedCaption != null ||
+      (_isPlayerInitialized &&
+          _player.state.track.subtitle.id != 'no' &&
+          _player.state.track.subtitle.id.isNotEmpty);
 
   // Player Settings & Gesture Preferences
   bool _gesturesEnabled = true;
@@ -238,9 +275,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _seasons = List.from(widget.seasons);
     _currentSeason = widget.season;
     _currentEpisode = widget.episode;
-    _selectedResolution = _currentStream.availableResolutions.isNotEmpty
-        ? _currentStream.availableResolutions.first
-        : '1080';
+    _selectedResolution = 'auto';
 
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
@@ -254,21 +289,22 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _isPlaying = _player.state.playing;
       _position = _player.state.position;
       _duration = _player.state.duration;
+      _volume = (_player.state.volume / 100.0).clamp(0.0, 3.0);
       _positionNotifier.value = _position;
       _durationNotifier.value = _duration;
     } else {
       _player = Player(
         configuration: const PlayerConfiguration(
-          bufferSize: 32 * 1024 * 1024,
+          bufferSize: 64 * 1024 * 1024,
         ),
       );
 
       _videoController = VideoController(
         _player,
         configuration: VideoControllerConfiguration(
-          hwdec: Platform.isAndroid ? 'mediacodec' : 'auto',
+          hwdec: Platform.isAndroid ? 'mediacodec-copy' : 'auto',
           enableHardwareAcceleration: true,
-          androidAttachSurfaceAfterVideoParameters: true,
+          androidAttachSurfaceAfterVideoParameters: false,
         ),
       );
     }
@@ -295,6 +331,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
       if (mounted) setState(() {});
     }));
 
+    _subscriptions.add(_player.stream.buffering.listen((buffering) {
+      if (_isBuffering != buffering) {
+        if (mounted) {
+          setState(() {
+            _isBuffering = buffering;
+          });
+        }
+        _onBufferingChanged(buffering);
+      }
+    }));
+
     _subscriptions.add(_player.stream.error.listen((err) {
       if (mounted && err.isNotEmpty) {
         setState(() {
@@ -303,6 +350,95 @@ class _PlayerScreenState extends State<PlayerScreen> {
         });
       }
     }));
+
+    _subscriptions.add(_player.stream.tracks.listen((tracks) {
+      if (_selectedCaption != null) {
+        _player.setSubtitleTrack(SubtitleTrack.no());
+        return;
+      }
+      if (_hasAutoSelectedSubtitle) return;
+      final subTracks = tracks.subtitle;
+      if (subTracks.isEmpty) return;
+
+      final enTrack = subTracks.firstWhere(
+        (t) => _isEnglishTrack(t),
+        orElse: () => SubtitleTrack.no(),
+      );
+
+      _hasAutoSelectedSubtitle = true;
+      if (enTrack.id != 'no') {
+        if (_player.state.track.subtitle.id != enTrack.id) {
+          _player.setSubtitleTrack(enTrack);
+        }
+      } else {
+        if (_player.state.track.subtitle.id != 'no') {
+          _player.setSubtitleTrack(SubtitleTrack.no());
+        }
+      }
+    }));
+  }
+
+  void _onBufferingChanged(bool buffering) {
+    _bufferingWatchdogTimer?.cancel();
+    if (buffering) {
+      _lastBufferTime = DateTime.now();
+      _consecutiveBufferingCount++;
+      if (_selectedResolution == 'auto' && _consecutiveBufferingCount >= 2) {
+        _stepDownQualityInAuto();
+      }
+      // If buffering continues for over 10 seconds, trigger stream recovery
+      _bufferingWatchdogTimer = Timer(const Duration(seconds: 10), () {
+        if (_isBuffering && mounted) {
+          _recoverStalledPlayback();
+        }
+      });
+    }
+  }
+
+  Future<void> _recoverStalledPlayback() async {
+    debugPrint('[Player] Buffer stalled for >10s, auto-recovering...');
+    _showHudOverlay(
+      title: 'Buffering',
+      value: 'Optimizing connection...',
+      icon: Icons.sync,
+    );
+    _hudTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _showHud = false);
+    });
+    try {
+      final currentPos = _position;
+      await _refreshStreamCookie();
+      // Re-trigger playback by seeking to current position to force demuxer reload
+      await _player.seek(currentPos);
+      if (!_player.state.playing) {
+        await _player.play();
+      }
+    } catch (e) {
+      debugPrint('[Player] Error during auto-recovery: $e');
+    }
+  }
+
+  Future<String?> _refreshStreamCookie() async {
+    try {
+      final streams = await widget.apiService.fetchPlayInfo(
+        widget.subjectId,
+        season: _currentSeason,
+        episode: _currentEpisode,
+      );
+      if (streams.isNotEmpty) {
+        final matching = streams.firstWhere(
+          (s) => s.id == _currentStream.id || s.format == _currentStream.format,
+          orElse: () => streams.first,
+        );
+        if (matching.signCookie != null && matching.signCookie!.isNotEmpty) {
+          _currentStream = matching;
+          return matching.signCookie;
+        }
+      }
+    } catch (e) {
+      debugPrint('[Player] Failed to refresh stream cookie: $e');
+    }
+    return null;
   }
 
   void _loadPlayerSettings() {
@@ -358,10 +494,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     });
 
     _storage = await LocalStorageService.getInstance();
+    _selectedResolution = _storage?.preferredQuality ?? 'auto';
+    if (_selectedResolution == 'auto') {
+      _startAbrMonitor();
+    }
     _loadPlayerSettings();
     _loadSubSettings();
     try {
-      await (_player.platform as NativePlayer).setProperty('volume-max', '200');
+      await (_player.platform as NativePlayer).setProperty('volume-max', '300');
     } catch (_) {}
 
     if (widget.existingPlayer != null) {
@@ -370,8 +510,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _startHideTimer();
       _startProgressTimer();
       _startPulseTimer();
-      if (_currentStream.captions.isNotEmpty && _selectedCaption == null) {
-        _loadSubtitleTrack(_pickEnglish());
+      final enCaption = _pickEnglish();
+      if (enCaption != null && _selectedCaption == null) {
+        _hasAutoSelectedSubtitle = true;
+        _loadSubtitleTrack(enCaption);
+      } else if (_selectedCaption == null) {
+        final subTracks = _player.state.tracks.subtitle;
+        final enTrack = subTracks.firstWhere(
+          (t) => _isEnglishTrack(t),
+          orElse: () => SubtitleTrack.no(),
+        );
+        _hasAutoSelectedSubtitle = true;
+        _player.setSubtitleTrack(enTrack);
       }
       if (mounted) setState(() {});
       return;
@@ -401,10 +551,14 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
 
     final rawUrl = _currentStream.url;
-    final playbackUrl = LocalStreamProxy.instance.registerStream(
+    final basePlaybackUrl = LocalStreamProxy.instance.registerStream(
       originalUrl: rawUrl,
       signCookie: _currentStream.signCookie,
+      cookieRefresher: _refreshStreamCookie,
     );
+    final playbackUrl = _selectedResolution == 'auto'
+        ? basePlaybackUrl
+        : '$basePlaybackUrl?quality=$_selectedResolution';
 
     try {
       // Check if we have previous watch progress
@@ -447,8 +601,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _startPulseTimer();
 
       // Auto-load English subtitle if available
-      if (_currentStream.captions.isNotEmpty && _selectedCaption == null) {
-        _loadSubtitleTrack(_pickEnglish());
+      final enCaption = _pickEnglish();
+      if (enCaption != null && _selectedCaption == null) {
+        _hasAutoSelectedSubtitle = true;
+        _loadSubtitleTrack(enCaption);
+      } else if (_selectedCaption == null) {
+        final subTracks = _player.state.tracks.subtitle;
+        final enTrack = subTracks.firstWhere(
+          (t) => _isEnglishTrack(t),
+          orElse: () => SubtitleTrack.no(),
+        );
+        _hasAutoSelectedSubtitle = true;
+        _player.setSubtitleTrack(enTrack);
       }
 
       if (mounted) setState(() {});
@@ -484,9 +648,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Future<void> _loadSubtitleTrack(CaptionTrack? caption) async {
+    _hasAutoSelectedSubtitle = true;
     _selectedCaption = caption;
     _subtitles.clear();
     _currentSubtitleText = null;
+
+    // Disable MPV embedded subtitle track so it doesn't double-render or show Arabic
+    try {
+      await _player.setSubtitleTrack(SubtitleTrack.no());
+    } catch (_) {}
 
     if (caption == null || caption.url.isEmpty) {
       if (mounted) setState(() {});
@@ -606,6 +776,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _oneSecPulseTimer?.cancel();
     _hudTimer?.cancel();
     _rippleTimer?.cancel();
+    _bufferingWatchdogTimer?.cancel();
+    _abrTimer?.cancel();
 
     _positionNotifier.dispose();
     _durationNotifier.dispose();
@@ -800,19 +972,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
       });
     } else if (_activePan == _ActivePanGesture.volume) {
       final delta = -dy / (screenSize.height * 0.75);
-      final newV = (_panStartVolume + delta).clamp(0.0, 2.0);
+      final newV = (_panStartVolume + delta).clamp(0.0, 3.0);
+      if ((_volume <= 1.0 && newV > 1.0) || (_volume > 1.0 && newV <= 1.0)) {
+        HapticFeedback.lightImpact();
+      }
       _player.setVolume(newV * 100.0);
+      final isBoost = newV > 1.0;
       setState(() {
         _volume = newV;
         _showHudOverlay(
-          title: 'Volume',
+          title: isBoost ? 'Volume Boost' : 'Volume',
           value: '${(newV * 100).round()}%',
-          icon: newV > 0.6
+          icon: isBoost
               ? Icons.volume_up
-              : newV > 0.0
-                  ? Icons.volume_down
-                  : Icons.volume_mute,
-          progress: newV / 2,
+              : (newV > 0.6
+                  ? Icons.volume_up
+                  : (newV > 0.0
+                      ? Icons.volume_down
+                      : Icons.volume_mute)),
+          progress: (newV / 3.0).clamp(0.0, 1.0),
         );
       });
     } else if (_activePan == _ActivePanGesture.seek) {
@@ -970,19 +1148,124 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   // ==================== STREAM / DUB / EPISODE SWITCHING ====================
 
-  Future<void> _reloadStreamAtPosition(Duration pos, {bool autoPlay = true}) async {
+  Future<void> _reloadStreamAtPosition(Duration pos, {bool autoPlay = true, String? qualityOverride}) async {
     final rawUrl = _currentStream.url;
-    final playbackUrl = LocalStreamProxy.instance.registerStream(
+    final basePlaybackUrl = LocalStreamProxy.instance.registerStream(
       originalUrl: rawUrl,
       signCookie: _currentStream.signCookie,
+      cookieRefresher: _refreshStreamCookie,
     );
+    final targetQ = qualityOverride ?? _selectedResolution;
+    final playbackUrl = (targetQ == 'auto')
+        ? basePlaybackUrl
+        : '$basePlaybackUrl?quality=$targetQ';
 
     try {
       await _player.open(Media(playbackUrl, start: pos), play: autoPlay);
       await _applyActiveVisualEnhancements();
       _startHideTimer();
+
+      _hasAutoSelectedSubtitle = false;
+      final enCaption = _pickEnglish();
+      if (enCaption != null) {
+        _hasAutoSelectedSubtitle = true;
+        _loadSubtitleTrack(enCaption);
+      } else {
+        _loadSubtitleTrack(null);
+      }
+
       if (mounted) setState(() {});
     } catch (_) {}
+  }
+
+  // ==================== QUALITY & SMART ABR ENGINE ====================
+
+  void _startAbrMonitor() {
+    _abrTimer?.cancel();
+    _abrTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted || !_isPlaying || _selectedResolution != 'auto') return;
+
+      final now = DateTime.now();
+      // 10s cooldown to prevent switching thrashing
+      if (now.difference(_lastQualitySwitchTime).inSeconds < 10) return;
+
+      final bandwidthMbps = LocalStreamProxy.instance.estimatedBandwidthMbps;
+      final timeSinceBuffer = now.difference(_lastBufferTime).inSeconds;
+
+      // Emergency downgrade if stalled recently or consecutive buffer events
+      if (_consecutiveBufferingCount > 0 || timeSinceBuffer < 8) {
+        _consecutiveBufferingCount = 0;
+        _stepDownQualityInAuto();
+      } else if (_activeQualityTier == '1080' && bandwidthMbps < 2.5) {
+        _switchQualityTier('720', isAuto: true);
+      } else if (_activeQualityTier == '720' && bandwidthMbps < 1.2) {
+        _switchQualityTier('480', isAuto: true);
+      }
+      // Upgrade if network is smooth and fast for at least 15s
+      else if (timeSinceBuffer >= 15) {
+        if (_activeQualityTier == '480' && bandwidthMbps >= 2.0) {
+          _switchQualityTier('720', isAuto: true);
+        } else if (_activeQualityTier == '720' && bandwidthMbps >= 4.0) {
+          _switchQualityTier('1080', isAuto: true);
+        }
+      }
+    });
+  }
+
+  void _stepDownQualityInAuto() {
+    if (_activeQualityTier == '1080') {
+      _switchQualityTier('720', isAuto: true);
+    } else if (_activeQualityTier == '720') {
+      _switchQualityTier('480', isAuto: true);
+    }
+  }
+
+  Future<void> _switchQualityTier(String targetTier, {bool isAuto = false}) async {
+    if (!mounted) return;
+    _lastQualitySwitchTime = DateTime.now();
+    final prevTier = _activeQualityTier;
+    _activeQualityTier = targetTier;
+
+    // 1. Try media_kit VideoTrack switch if multiple video tracks exist
+    final videoTracks = _player.state.tracks.video;
+    VideoTrack? matchingTrack;
+    if (videoTracks.length > 1) {
+      final targetH = int.tryParse(targetTier) ?? 1080;
+      for (final t in videoTracks) {
+        if (t.h != null && (t.h! - targetH).abs() < 60) {
+          matchingTrack = t;
+          break;
+        } else if (t.title?.contains(targetTier) ?? false) {
+          matchingTrack = t;
+          break;
+        }
+      }
+    }
+
+    if (matchingTrack != null && _player.state.track.video.id != matchingTrack.id) {
+      await _player.setVideoTrack(matchingTrack);
+      if (mounted) setState(() {});
+      if (isAuto && prevTier != targetTier) {
+        _showHudOverlay(
+          title: 'Auto Quality',
+          value: '${targetTier}p',
+          icon: Icons.speed,
+        );
+      }
+      return;
+    }
+
+    // 2. Seamless reload via LocalStreamProxy manifest filter at current playback position
+    final pos = _player.state.position;
+    final isPlaying = _player.state.playing;
+    await _reloadStreamAtPosition(pos, autoPlay: isPlaying, qualityOverride: targetTier);
+    if (isAuto && prevTier != targetTier) {
+      _showHudOverlay(
+        title: 'Auto Quality',
+        value: '${targetTier}p',
+        icon: Icons.speed,
+      );
+    }
   }
 
   Future<void> _switchDub(Dub dub) async {
@@ -1263,41 +1546,67 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _buildQualityDrawer() {
     final resolutions = _currentStream.availableResolutions;
+    final options = ['auto', ...resolutions];
     return Column(
       children: [
         _buildDrawerHeader('Quality', Icons.hd_outlined),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(vertical: 4),
-            itemCount: resolutions.length,
+            itemCount: options.length,
             itemBuilder: (context, index) {
-              final res = resolutions[index];
+              final res = options[index];
               final isSelected = res == _selectedResolution;
+              final isAuto = res == 'auto';
+              final label = isAuto
+                  ? 'Auto (Smooth Adaptive)'
+                  : '${res}p ${res == '1080' ? 'Full HD' : (res == '720' ? 'HD' : 'SD')}';
+              final subtitle = isAuto
+                  ? 'Adapts to connection speed (Current: ${_activeQualityTier}p)'
+                  : null;
+
               return ListTile(
                 dense: true,
                 visualDensity: VisualDensity.compact,
                 leading: Icon(
-                  Icons.hd_outlined,
+                  isAuto ? Icons.speed_rounded : Icons.hd_outlined,
                   size: 18,
                   color: isSelected ? AppTheme.accentCyan : Colors.white54,
                 ),
                 title: Text(
-                  '${res}p HD',
+                  label,
                   style: TextStyle(
                     color: isSelected ? AppTheme.accentCyan : Colors.white,
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                     fontSize: 12,
                   ),
                 ),
+                subtitle: subtitle != null
+                    ? Text(
+                        subtitle,
+                        style: TextStyle(
+                          color: isSelected ? AppTheme.accentCyan.withValues(alpha: 0.7) : Colors.white38,
+                          fontSize: 10,
+                        ),
+                      )
+                    : null,
                 trailing: isSelected ? Icon(Icons.check, color: AppTheme.accentCyan, size: 16) : null,
-                onTap: () {
+                onTap: () async {
                   setState(() {
                     _selectedResolution = res;
                     _activeSideDrawer = _ActiveSideDrawer.none;
                   });
-                  _showHudOverlay(title: 'Quality', value: '${res}p', icon: Icons.hd);
+                  await _storage?.setPreferredQuality(res);
+                  if (res == 'auto') {
+                    _startAbrMonitor();
+                    _showHudOverlay(title: 'Quality', value: 'Auto (${_activeQualityTier}p)', icon: Icons.speed);
+                  } else {
+                    _abrTimer?.cancel();
+                    await _switchQualityTier(res, isAuto: false);
+                    _showHudOverlay(title: 'Quality', value: '${res}p', icon: Icons.hd);
+                  }
                   _hudTimer?.cancel();
-                  _hudTimer = Timer(const Duration(milliseconds: 1200), () {
+                  _hudTimer = Timer(const Duration(milliseconds: 1400), () {
                     if (mounted) setState(() => _showHud = false);
                   });
                 },
@@ -1351,6 +1660,33 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   Widget _buildSubtitlesDrawer() {
     final captions = _currentStream.captions;
+    final sortedCaptions = List<CaptionTrack>.from(captions);
+    sortedCaptions.sort((a, b) {
+      final aEn = _isCaptionEnglish(a);
+      final bEn = _isCaptionEnglish(b);
+      if (aEn && !bEn) return -1;
+      if (!aEn && bEn) return 1;
+      final aName = a.lanName.isNotEmpty ? a.lanName : a.language;
+      final bName = b.lanName.isNotEmpty ? b.lanName : b.language;
+      return aName.compareTo(bName);
+    });
+
+    final embeddedTracks = _player.state.tracks.subtitle
+        .where((t) => t.id != 'no' && t.id != 'auto')
+        .toList();
+    embeddedTracks.sort((a, b) {
+      final aEn = _isEnglishTrack(a);
+      final bEn = _isEnglishTrack(b);
+      if (aEn && !bEn) return -1;
+      if (!aEn && bEn) return 1;
+      final aName = (a.title != null && a.title!.isNotEmpty) ? a.title! : (a.language ?? a.id);
+      final bName = (b.title != null && b.title!.isNotEmpty) ? b.title! : (b.language ?? b.id);
+      return aName.compareTo(bName);
+    });
+
+    final isOff = _selectedCaption == null &&
+        (_player.state.track.subtitle.id == 'no' || _player.state.track.subtitle.id.isEmpty);
+
     return Column(
       children: [
         _buildDrawerHeader('Subtitles', Icons.subtitles_outlined),
@@ -1364,39 +1700,62 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 leading: Icon(
                   Icons.subtitles_off_outlined,
                   size: 18,
-                  color: _selectedCaption == null ? AppTheme.accentGreen : Colors.white54,
+                  color: isOff ? AppTheme.accentGreen : Colors.white54,
                 ),
                 title: Text(
                   'Off',
                   style: TextStyle(
-                    color: _selectedCaption == null ? AppTheme.accentGreen : Colors.white,
-                    fontWeight: _selectedCaption == null ? FontWeight.bold : FontWeight.normal,
+                    color: isOff ? AppTheme.accentGreen : Colors.white,
+                    fontWeight: isOff ? FontWeight.bold : FontWeight.normal,
                     fontSize: 12,
                   ),
                 ),
-                trailing: _selectedCaption == null ? Icon(Icons.check, color: AppTheme.accentGreen, size: 16) : null,
+                trailing: isOff ? Icon(Icons.check, color: AppTheme.accentGreen, size: 16) : null,
                 onTap: () {
                   setState(() => _activeSideDrawer = _ActiveSideDrawer.none);
                   _loadSubtitleTrack(null);
                 },
               ),
-              ...captions.map((c) {
+              ...sortedCaptions.map((c) {
                 final isSelected = _selectedCaption?.url == c.url;
+                final isEn = _isCaptionEnglish(c);
                 return ListTile(
                   dense: true,
                   visualDensity: VisualDensity.compact,
                   leading: Icon(
                     Icons.subtitles_outlined,
                     size: 18,
-                    color: isSelected ? AppTheme.accentGreen : Colors.white54,
+                    color: isSelected ? AppTheme.accentGreen : (isEn ? Colors.white : Colors.white54),
                   ),
-                  title: Text(
-                    c.lanName.isNotEmpty ? c.lanName : c.language,
-                    style: TextStyle(
-                      color: isSelected ? AppTheme.accentGreen : Colors.white,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                      fontSize: 12,
-                    ),
+                  title: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          c.lanName.isNotEmpty ? c.lanName : c.language,
+                          style: TextStyle(
+                            color: isSelected ? AppTheme.accentGreen : Colors.white,
+                            fontWeight: (isSelected || isEn) ? FontWeight.bold : FontWeight.normal,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      if (isEn)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppTheme.accentGreen.withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            'EN',
+                            style: TextStyle(
+                              color: AppTheme.accentGreen,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 9,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                   trailing: isSelected ? Icon(Icons.check, color: AppTheme.accentGreen, size: 16) : null,
                   onTap: () {
@@ -1405,6 +1764,78 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   },
                 );
               }),
+              if (embeddedTracks.isNotEmpty) ...[
+                if (sortedCaptions.isNotEmpty)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(14, 10, 14, 4),
+                    child: Text(
+                      'EMBEDDED TRACKS',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.8,
+                      ),
+                    ),
+                  ),
+                ...embeddedTracks.map((t) {
+                  final isSelected = _selectedCaption == null && _player.state.track.subtitle.id == t.id;
+                  final isEn = _isEnglishTrack(t);
+                  final label = (t.title != null && t.title!.isNotEmpty)
+                      ? t.title!
+                      : ((t.language != null && t.language!.isNotEmpty) ? t.language! : 'Track ${t.id}');
+                  return ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    leading: Icon(
+                      Icons.closed_caption_outlined,
+                      size: 18,
+                      color: isSelected ? AppTheme.accentGreen : (isEn ? Colors.white : Colors.white54),
+                    ),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                              color: isSelected ? AppTheme.accentGreen : Colors.white,
+                              fontWeight: (isSelected || isEn) ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        if (isEn)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                            decoration: BoxDecoration(
+                              color: AppTheme.accentGreen.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              'EN',
+                              style: TextStyle(
+                                color: AppTheme.accentGreen,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 9,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    trailing: isSelected ? Icon(Icons.check, color: AppTheme.accentGreen, size: 16) : null,
+                    onTap: () {
+                      _hasAutoSelectedSubtitle = true;
+                      setState(() {
+                        _activeSideDrawer = _ActiveSideDrawer.none;
+                        _selectedCaption = null;
+                        _subtitles.clear();
+                        _currentSubtitleText = null;
+                      });
+                      _player.setSubtitleTrack(t);
+                    },
+                  );
+                }),
+              ],
               const Divider(color: Colors.white12),
               _subSlider('Delay ${(_subDelayMs / 1000).toStringAsFixed(1)}s', _subDelayMs.toDouble(), -5000, 5000,
                   (v) => _subDelayMs = (v / 100).round() * 100),
@@ -1590,8 +2021,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
       player: _player,
       availableResolutions: _currentStream.availableResolutions,
       currentResolution: _selectedResolution,
-      onResolutionChanged: (res) {
+      onResolutionChanged: (res) async {
         setState(() => _selectedResolution = res);
+        await _storage?.setPreferredQuality(res);
+        if (res == 'auto') {
+          _startAbrMonitor();
+          _showHudOverlay(title: 'Quality', value: 'Auto (${_activeQualityTier}p)', icon: Icons.speed);
+        } else {
+          _abrTimer?.cancel();
+          await _switchQualityTier(res, isAuto: false);
+          _showHudOverlay(title: 'Quality', value: '${res}p', icon: Icons.hd);
+        }
       },
       onSettingsChanged: () {
         _loadPlayerSettings();
@@ -1781,10 +2221,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
               ),
 
-            // Loading Indicator for Dub / Episode Transitions
-            if (_isLoadingMedia)
+            // Loading Indicator for Dub / Episode Transitions or Network Buffering
+            if (_isLoadingMedia || (_isBuffering && !_hasError))
               Center(
-                child: CircularProgressIndicator(color: AppTheme.accentGreen),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.65),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: AppTheme.accentGreen.withValues(alpha: 0.3),
+                      width: 1,
+                    ),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(
+                        color: AppTheme.accentGreen,
+                        strokeWidth: 3,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        _isLoadingMedia ? 'Loading media...' : 'Buffering...',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.9),
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
 
             // Double Tap Ripple Effect
@@ -1886,6 +2355,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 
   Widget _buildGestureHud() {
+    final isBoost = _volume > 1.0 && _hudTitle.contains('Volume');
+    final accentColor = isBoost ? const Color(0xFFFF9100) : AppTheme.accentGreen;
+
     return Positioned(
       top: 10,
       left: 0,
@@ -1895,27 +2367,56 @@ class _PlayerScreenState extends State<PlayerScreen> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
             decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.28),
+              color: Colors.black.withValues(alpha: isBoost ? 0.75 : 0.28),
               borderRadius: BorderRadius.circular(12),
+              border: isBoost
+                  ? Border.all(color: const Color(0xFFFF9100).withValues(alpha: 0.6), width: 1.2)
+                  : null,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(_hudIcon, color: AppTheme.accentGreen, size: 14),
+                Icon(_hudIcon, color: accentColor, size: 14),
                 const SizedBox(width: 6),
                 Text(
                   _hudTitle.isEmpty ? _hudValue : '$_hudTitle  $_hudValue',
-                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 11),
+                  style: TextStyle(
+                    color: isBoost ? const Color(0xFFFF9100) : Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
                 ),
+                if (isBoost) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFF9100).withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'BOOST',
+                      style: TextStyle(
+                        color: const Color(0xFFFF9100),
+                        fontSize: 8,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ),
+                ],
                 if (_hudProgress != null) ...[
                   const SizedBox(width: 8),
                   SizedBox(
                     width: 60,
-                    child: LinearProgressIndicator(
-                      value: _hudProgress!.clamp(0.0, 1.0),
-                      backgroundColor: Colors.white24,
-                      color: AppTheme.accentGreen,
-                      minHeight: 2,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: _hudProgress!.clamp(0.0, 1.0),
+                        backgroundColor: Colors.white24,
+                        color: accentColor,
+                        minHeight: 2,
+                      ),
                     ),
                   ),
                 ],
@@ -2021,8 +2522,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
             // 1. Dedicated Subtitles Button
             IconButton(
               icon: Icon(
-                _selectedCaption != null ? Icons.subtitles : Icons.subtitles_outlined,
-                color: _selectedCaption != null ? AppTheme.accentGreen : Colors.white70,
+                _isSubtitleActive ? Icons.subtitles : Icons.subtitles_outlined,
+                color: _isSubtitleActive ? AppTheme.accentGreen : Colors.white70,
                 size: 20,
               ),
               tooltip: 'Subtitles',
@@ -2076,7 +2577,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '${_selectedResolution}p',
+                      _selectedResolution == 'auto'
+                          ? 'Auto • ${_activeQualityTier}p'
+                          : '${_selectedResolution}p',
                       style: TextStyle(
                         color: AppTheme.accentCyan,
                         fontWeight: FontWeight.bold,

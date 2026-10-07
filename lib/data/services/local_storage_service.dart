@@ -35,6 +35,7 @@ class LocalStorageService extends ChangeNotifier {
   static const String _keyActiveAnime4kQuality = 'mb_active_anime4k_quality';
   static const String _keyActiveColorProfileId = 'mb_active_color_profile_id';
   static const String _keyCustomColorProfiles = 'mb_custom_color_profiles';
+  static const String _keyPreferredQuality = 'mb_preferred_quality';
   static const String _prefixTabSectionOrder = 'mb_tab_section_order_';
   static const String _prefixTabHiddenSections = 'mb_tab_hidden_sections_';
   static const String _keyHomeCustomSections = 'mb_home_custom_sections';
@@ -150,6 +151,7 @@ class LocalStorageService extends ChangeNotifier {
 
   Future<void> setAutoRegion(bool enabled) async {
     await _prefs?.setBool(_keyIsAutoRegion, enabled);
+    await setCachedToken(null);
     notifyListeners();
   }
 
@@ -158,6 +160,7 @@ class LocalStorageService extends ChangeNotifier {
       await _prefs?.setBool(_keyIsAutoRegion, false);
     }
     await _prefs?.setString(_keyRegion, region);
+    await setCachedToken(null);
     notifyListeners();
   }
 
@@ -177,8 +180,12 @@ class LocalStorageService extends ChangeNotifier {
   // Cached Token
   String? get cachedToken => _prefs?.getString(_keyToken);
 
-  Future<void> setCachedToken(String token) async {
-    await _prefs?.setString(_keyToken, token);
+  Future<void> setCachedToken(String? token) async {
+    if (token == null) {
+      await _prefs?.remove(_keyToken);
+    } else {
+      await _prefs?.setString(_keyToken, token);
+    }
   }
 
   // Search History
@@ -571,6 +578,14 @@ class LocalStorageService extends ChangeNotifier {
     notifyListeners();
   }
 
+  String get preferredQuality =>
+      _prefs?.getString(_keyPreferredQuality) ?? 'auto';
+
+  Future<void> setPreferredQuality(String quality) async {
+    await _prefs?.setString(_keyPreferredQuality, quality);
+    notifyListeners();
+  }
+
   List<Map<String, dynamic>> getCustomColorProfiles() {
     final raw = _prefs?.getString(_keyCustomColorProfiles);
     if (raw == null || raw.isEmpty) return [];
@@ -806,6 +821,7 @@ class LocalStorageService extends ChangeNotifier {
       'activeAnime4kMode': activeAnime4kMode,
       'activeAnime4kQuality': activeAnime4kQuality,
       'activeColorProfileId': activeColorProfileId,
+      'preferredQuality': preferredQuality,
       'customColorProfiles': colorProfiles,
     };
 
@@ -1099,6 +1115,9 @@ class LocalStorageService extends ChangeNotifier {
     }
     if (s['activeColorProfileId'] is String) {
       await _prefs?.setString(_keyActiveColorProfileId, s['activeColorProfileId']);
+    }
+    if (s['preferredQuality'] is String) {
+      await _prefs?.setString(_keyPreferredQuality, s['preferredQuality']);
     }
     if (s['customColorProfiles'] is List) {
       await _prefs?.setString(_keyCustomColorProfiles, json.encode(s['customColorProfiles']));

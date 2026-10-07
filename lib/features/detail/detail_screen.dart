@@ -82,6 +82,8 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
   bool _isVideoLoading = true;
   bool _isFullscreen = false;
   String? _videoError;
+  bool _isBuffering = false;
+  Timer? _bufferingWatchdogTimer;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
   bool _showControls = true;
@@ -185,6 +187,7 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
     _controlsTimer?.cancel();
     _hudTimer?.cancel();
     _rippleTimer?.cancel();
+    _bufferingWatchdogTimer?.cancel();
     for (final s in _subscriptions) {
       s.cancel();
     }
@@ -277,6 +280,28 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
     }
   }
 
+  Future<String?> _refreshDetailCookie() async {
+    try {
+      final targetSubjectId = _selectedDub?.subjectId ?? widget.subjectId;
+      final refreshedStreams = await widget.apiService.fetchPlayInfo(
+        targetSubjectId,
+        season: _selectedSeason,
+        episode: _selectedEpisode,
+      );
+      if (refreshedStreams.isNotEmpty) {
+        final matching = refreshedStreams.firstWhere(
+          (s) => s.id == _currentStream?.id || s.format == _currentStream?.format,
+          orElse: () => refreshedStreams.first,
+        );
+        if (matching.signCookie != null && matching.signCookie!.isNotEmpty) {
+          _currentStream = matching;
+          return matching.signCookie;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<void> _loadAndPlayStream({int season = 0, int episode = 0}) async {
     if (_detail == null) return;
     if (MiniplayerService.instance.isActive) {
@@ -323,25 +348,31 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
       _currentStream = streams.first;
 
       final rawUrl = _currentStream!.url;
-      final playbackUrl = LocalStreamProxy.instance.registerStream(
+
+      final basePlaybackUrl = LocalStreamProxy.instance.registerStream(
         originalUrl: rawUrl,
         signCookie: _currentStream!.signCookie,
+        cookieRefresher: _refreshDetailCookie,
       );
+      final prefQ = _storage?.preferredQuality ?? 'auto';
+      final playbackUrl = (prefQ == 'auto')
+          ? basePlaybackUrl
+          : '$basePlaybackUrl?quality=$prefQ';
 
       // Initialize media_kit Player if not already created
       if (_player == null) {
         _player = Player(
           configuration: const PlayerConfiguration(
-            bufferSize: 32 * 1024 * 1024,
+            bufferSize: 64 * 1024 * 1024,
           ),
         );
 
         _videoController = VideoController(
           _player!,
           configuration: VideoControllerConfiguration(
-            hwdec: Platform.isAndroid ? 'mediacodec' : 'auto',
+            hwdec: Platform.isAndroid ? 'mediacodec-copy' : 'auto',
             enableHardwareAcceleration: true,
-            androidAttachSurfaceAfterVideoParameters: true,
+            androidAttachSurfaceAfterVideoParameters: false,
           ),
         );
 
@@ -365,6 +396,27 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
             } else {
               WakelockPlus.disable();
               _saveWatchProgress();
+            }
+          }
+        }));
+
+        _subscriptions.add(_player!.stream.buffering.listen((buffering) {
+          if (_isBuffering != buffering) {
+            if (mounted) {
+              setState(() => _isBuffering = buffering);
+            }
+            _bufferingWatchdogTimer?.cancel();
+            if (buffering) {
+              _bufferingWatchdogTimer = Timer(const Duration(seconds: 10), () async {
+                if (_isBuffering && mounted && _player != null) {
+                  try {
+                    await _refreshDetailCookie();
+                    final cur = _player!.state.position;
+                    await _player!.seek(cur);
+                    if (!_player!.state.playing) await _player!.play();
+                  } catch (_) {}
+                }
+              });
             }
           }
         }));
@@ -621,19 +673,25 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
       });
     } else if (_activePan == _ActivePanGesture.volume) {
       final delta = -dy / (screenSize.height * 0.75);
-      final newV = (_panStartVolume + delta).clamp(0.0, 1.0);
+      final newV = (_panStartVolume + delta).clamp(0.0, 3.0);
+      if ((_volume <= 1.0 && newV > 1.0) || (_volume > 1.0 && newV <= 1.0)) {
+        HapticFeedback.lightImpact();
+      }
       _player?.setVolume(newV * 100.0);
+      final isBoost = newV > 1.0;
       setState(() {
         _volume = newV;
         _showHudOverlay(
-          title: 'Volume',
+          title: isBoost ? 'Volume Boost' : 'Volume',
           value: '${(newV * 100).round()}%',
-          icon: newV > 0.6
+          icon: isBoost
               ? Icons.volume_up
-              : newV > 0.0
-                  ? Icons.volume_down
-                  : Icons.volume_mute,
-          progress: newV,
+              : (newV > 0.6
+                  ? Icons.volume_up
+                  : (newV > 0.0
+                      ? Icons.volume_down
+                      : Icons.volume_mute)),
+          progress: (newV / 3.0).clamp(0.0, 1.0),
         );
       });
     } else if (_activePan == _ActivePanGesture.seek) {
@@ -792,8 +850,24 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
       storage: _storage!,
       player: _player!,
       availableResolutions: _currentStream?.availableResolutions ?? ['1080', '720', '480'],
-      currentResolution: '1080',
-      onResolutionChanged: (res) {},
+      currentResolution: _storage?.preferredQuality ?? 'auto',
+      onResolutionChanged: (res) async {
+        await _storage?.setPreferredQuality(res);
+        if (_currentStream != null && _player != null) {
+          final cur = _player!.state.position;
+          final playing = _player!.state.playing;
+          final base = LocalStreamProxy.instance.registerStream(
+            originalUrl: _currentStream!.url,
+            signCookie: _currentStream!.signCookie,
+            cookieRefresher: _refreshDetailCookie,
+          );
+          final url = (res == 'auto') ? base : '$base?quality=$res';
+          try {
+            await _player!.open(Media(url, start: cur), play: playing);
+            await _applyActiveVisualEnhancements();
+          } catch (_) {}
+        }
+      },
       onSettingsChanged: () {
         _loadPlayerSettings();
       },
@@ -856,6 +930,9 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
   }
 
   Widget _buildGestureHud() {
+    final isBoost = _volume > 1.0 && _hudTitle.contains('Volume');
+    final accentColor = isBoost ? const Color(0xFFFF9100) : AppTheme.accentGreen;
+
     return Center(
       child: IgnorePointer(
         child: Container(
@@ -864,10 +941,15 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.88),
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: Colors.white12),
+            border: Border.all(
+              color: isBoost ? const Color(0xFFFF9100).withValues(alpha: 0.6) : Colors.white12,
+              width: isBoost ? 1.5 : 1.0,
+            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.6),
+                color: isBoost
+                    ? const Color(0xFFFF9100).withValues(alpha: 0.25)
+                    : Colors.black.withValues(alpha: 0.6),
                 blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
@@ -876,18 +958,46 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(_hudIcon, color: AppTheme.accentGreen, size: 28),
+              Icon(_hudIcon, color: accentColor, size: 28),
               const SizedBox(height: 4),
-              Text(
-                _hudTitle,
-                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _hudTitle,
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  if (isBoost) ...[
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFF9100).withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                      child: Text(
+                        'BOOST',
+                        style: TextStyle(
+                          color: const Color(0xFFFF9100),
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
               const SizedBox(height: 2),
               Text(
                 _hudValue,
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                style: TextStyle(
+                  color: isBoost ? const Color(0xFFFF9100) : Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -898,7 +1008,7 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
                   child: LinearProgressIndicator(
                     value: _hudProgress!.clamp(0.0, 1.0),
                     backgroundColor: Colors.white24,
-                    color: AppTheme.accentGreen,
+                    color: accentColor,
                     minHeight: 3,
                   ),
                 ),
@@ -2281,8 +2391,8 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
                   // Locked Speed Badge (Top Center)
                   _buildLockedSpeedBadge(),
 
-                  // Loading / Error HUD
-                  if (_isVideoLoading)
+                  // Loading / Buffering / Error HUD
+                  if (_isVideoLoading || (_isBuffering && _videoError == null))
                     Center(
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -2296,9 +2406,9 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
                             ),
                           ),
                           const SizedBox(height: 8),
-                          const Text(
-                            'Loading stream...',
-                            style: TextStyle(
+                          Text(
+                            _isVideoLoading ? 'Loading stream...' : 'Buffering...',
+                            style: const TextStyle(
                                 color: Colors.white70,
                                 fontSize: 12,
                                 fontWeight: FontWeight.w500),

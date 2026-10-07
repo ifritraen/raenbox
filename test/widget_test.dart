@@ -79,7 +79,30 @@ void main() {
     test('LocalStorageService geocentric region detection', () {
       final detected = LocalStorageService.detectDeviceRegion();
       expect(detected.isNotEmpty, true);
-      expect(['IN', 'US', 'NG', 'PH', 'KR', 'JP', 'GB', 'CN'].contains(detected), true);
+      expect(['GLOBAL', 'BD', 'IN', 'US', 'NG', 'PH', 'KR', 'JP', 'GB', 'CN'].contains(detected), true);
+    });
+
+    test('LocalStreamProxy.filterMpdForQuality isolates chosen video representation', () {
+      const sampleMpd = '''
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011">
+  <Period>
+    <AdaptationSet id="0" mimeType="video/mp4" contentType="video">
+      <Representation id="1" bandwidth="3000000" width="1920" height="1080" />
+      <Representation id="2" bandwidth="1500000" width="1280" height="720" />
+      <Representation id="3" bandwidth="800000" width="854" height="480" />
+    </AdaptationSet>
+    <AdaptationSet id="1" mimeType="audio/mp4" contentType="audio">
+      <Representation id="4" bandwidth="128000" />
+    </AdaptationSet>
+  </Period>
+</MPD>''';
+
+      final filtered720 = LocalStreamProxy.filterMpdForQuality(sampleMpd, '720');
+      expect(filtered720.contains('height="720"'), true);
+      expect(filtered720.contains('height="1080"'), false);
+      expect(filtered720.contains('height="480"'), false);
+      expect(filtered720.contains('mimeType="audio/mp4"'), true);
+      expect(filtered720.contains('id="4"'), true);
     });
   });
 }

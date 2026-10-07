@@ -206,58 +206,71 @@ class MovieBoxSigner {
   /// MovieBox hides the real master playlist inside CloudFront-Policy or urlprefix
   /// to prevent scraping and protect premium streams.
   static String extractRealStreamUrl(String rawUrl, String? signCookie) {
-    if (signCookie != null && signCookie.isNotEmpty) {
-      // 1. CloudFront-Policy extraction
-      if (signCookie.contains('CloudFront-Policy=')) {
-        try {
-          final b64 = signCookie.split('CloudFront-Policy=')[1].split(';')[0];
-          final padded = b64 + '=' * ((4 - (b64.length % 4)) % 4);
-          final normalized = padded.replaceAll('-', '+').replaceAll('_', '/');
-          final decoded = utf8.decode(base64.decode(normalized), allowMalformed: true).trim();
+    if (signCookie == null || signCookie.isEmpty) return rawUrl;
 
-          // Robust regex extraction first to prevent JSON parse errors on malformed padding
-          final resMatch = RegExp(r'"Resource"\s*:\s*"([^"]+)"').firstMatch(decoded);
-          String? resource = resMatch?.group(1);
+    // Only extract if rawUrl is actually the dummy teaser preview clip or empty.
+    // If rawUrl is already a valid stream (e.g. Transsion OSS, direct mp4/m3u8), preserve it!
+    final isTeaser = rawUrl.contains('b164fbfb43477929') ||
+        rawUrl.contains('macdn.aoneroom.com/other/') ||
+        rawUrl.trim().isEmpty;
 
-          if (resource == null) {
-            final lastBrace = decoded.lastIndexOf('}');
-            if (lastBrace != -1) {
-              final cleanJson = decoded.substring(0, lastBrace + 1);
-              final root = json.decode(cleanJson);
-              final statement = (root['Statement'] as List?)?.firstOrNull;
-              resource = statement?['Resource']?.toString();
-            }
-          }
-
-          if (resource != null && resource.startsWith('http')) {
-            final base = resource.contains('*')
-                ? resource.substring(0, resource.lastIndexOf('*'))
-                : resource;
-            final cleanBase = base.endsWith('/') ? base : '$base/';
-            return '${cleanBase}index.mpd';
-          }
-        } catch (_) {}
-      }
-
-      // 2. urlprefix extraction
-      if (signCookie.contains('urlprefix=')) {
-        try {
-          final b64 = signCookie.split('urlprefix=')[1].split(';')[0].split(':sign=')[0];
-          final padded = b64 + '=' * ((4 - (b64.length % 4)) % 4);
-          final normalized = padded.replaceAll('-', '+').replaceAll('_', '/');
-          final decoded = utf8.decode(base64.decode(normalized), allowMalformed: true).trim();
-          final urlMatch = RegExp(r'(https?://[^\s;"]+)').firstMatch(decoded);
-          final matchedUrl = urlMatch?.group(1) ?? (decoded.startsWith('http') ? decoded : null);
-          if (matchedUrl != null) {
-            final base = matchedUrl.contains('*')
-                ? matchedUrl.substring(0, matchedUrl.lastIndexOf('*'))
-                : matchedUrl;
-            final cleanBase = base.endsWith('/') ? base : '$base/';
-            return '${cleanBase}index.mpd';
-          }
-        } catch (_) {}
-      }
+    if (!isTeaser) {
+      return rawUrl;
     }
+
+    // 1. CloudFront-Policy extraction
+    if (signCookie.contains('CloudFront-Policy=')) {
+      try {
+        final b64 = signCookie.split('CloudFront-Policy=')[1].split(';')[0];
+        final padded = b64 + '=' * ((4 - (b64.length % 4)) % 4);
+        final normalized = padded.replaceAll('-', '+').replaceAll('_', '/');
+        final decoded = utf8.decode(base64.decode(normalized), allowMalformed: true).trim();
+
+        // Robust regex extraction first to prevent JSON parse errors on malformed padding
+        final resMatch = RegExp(r'"Resource"\s*:\s*"([^"]+)"').firstMatch(decoded);
+        String? resource = resMatch?.group(1);
+
+        if (resource == null) {
+          final lastBrace = decoded.lastIndexOf('}');
+          if (lastBrace != -1) {
+            final cleanJson = decoded.substring(0, lastBrace + 1);
+            final root = json.decode(cleanJson);
+            final statement = (root['Statement'] as List?)?.firstOrNull;
+            resource = statement?['Resource']?.toString();
+          }
+        }
+
+        if (resource != null && resource.startsWith('http')) {
+          final base = resource.contains('*')
+              ? resource.substring(0, resource.lastIndexOf('*'))
+              : resource;
+          final cleanBase = base.endsWith('/') ? base : '$base/';
+          final isHls = cleanBase.contains('/hls/') || cleanBase.contains('.m3u8');
+          return isHls ? '${cleanBase}index.m3u8' : '${cleanBase}index.mpd';
+        }
+      } catch (_) {}
+    }
+
+    // 2. urlprefix extraction (only if rawUrl was a teaser)
+    if (signCookie.contains('urlprefix=')) {
+      try {
+        final b64 = signCookie.split('urlprefix=')[1].split(';')[0].split(':sign=')[0];
+        final padded = b64 + '=' * ((4 - (b64.length % 4)) % 4);
+        final normalized = padded.replaceAll('-', '+').replaceAll('_', '/');
+        final decoded = utf8.decode(base64.decode(normalized), allowMalformed: true).trim();
+        final urlMatch = RegExp(r'(https?://[^\s;"]+)').firstMatch(decoded);
+        final matchedUrl = urlMatch?.group(1) ?? (decoded.startsWith('http') ? decoded : null);
+        if (matchedUrl != null) {
+          final base = matchedUrl.contains('*')
+              ? matchedUrl.substring(0, matchedUrl.lastIndexOf('*'))
+              : matchedUrl;
+          final cleanBase = base.endsWith('/') ? base : '$base/';
+          final isHls = cleanBase.contains('/hls/') || cleanBase.contains('.m3u8');
+          return isHls ? '${cleanBase}index.m3u8' : '${cleanBase}index.mpd';
+        }
+      } catch (_) {}
+    }
+
     return rawUrl;
   }
 }

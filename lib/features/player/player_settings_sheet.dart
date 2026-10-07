@@ -61,6 +61,7 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
   late double _longPressSpeed;
   late int _longPressDragRate;
   late bool _gesturesEnabled;
+  late String _selectedResolution;
 
   @override
   void initState() {
@@ -71,6 +72,7 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
     _longPressSpeed = widget.storage.playerLongPressSpeed;
     _longPressDragRate = widget.storage.playerLongPressDragRate;
     _gesturesEnabled = widget.storage.playerGesturesEnabled;
+    _selectedResolution = widget.currentResolution;
   }
 
   @override
@@ -127,6 +129,63 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
                 children: [
+                  // 1. Stream Quality & Auto Adaptive Bitrate (ABR)
+                  _buildSectionHeader('Stream Quality & Auto ABR', Icons.speed_rounded),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: AppTheme.bgCard,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.borderSubtle),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Playback Resolution',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'Auto mode dynamically scales between 1080p, 720p, and 480p based on internet bandwidth to prevent buffering stalls.',
+                          style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
+                        ),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            'auto',
+                            ...widget.availableResolutions,
+                          ].map((res) {
+                            final isSelected = res == _selectedResolution;
+                            final isAuto = res == 'auto';
+                            return ChoiceChip(
+                              label: Text(
+                                isAuto ? '⚡ Auto (Smooth)' : '${res}p',
+                                style: TextStyle(
+                                  color: isSelected ? AppTheme.bgPrimary : Colors.white,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              selected: isSelected,
+                              selectedColor: isAuto ? AppTheme.accentCyan : AppTheme.accentGreen,
+                              backgroundColor: Colors.white10,
+                              onSelected: (selected) {
+                                if (selected) {
+                                  setState(() => _selectedResolution = res);
+                                  widget.onResolutionChanged(res);
+                                }
+                              },
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
 
                   // 2. Anime4K Visual Enhancement & Color Profiles
                   _buildSectionHeader('Visual Enhancements', Icons.auto_awesome),
@@ -230,7 +289,7 @@ class _PlayerSettingsSheetState extends State<PlayerSettingsSheet> {
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
                       ),
                       subtitle: const Text(
-                        'Volume (right), Brightness (left), Seek (lower), Speed (upper)',
+                        'Volume (right up to 300% Boost), Brightness (left), Seek (lower), Speed (upper)',
                         style: TextStyle(color: AppTheme.textMuted, fontSize: 11),
                       ),
                       value: _gesturesEnabled,

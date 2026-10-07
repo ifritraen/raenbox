@@ -23,6 +23,55 @@ class DynamicSubTab {
   });
 }
 
+enum _QueryType {
+  rankingList,
+  searchKeyword,
+  subjectFilter,
+}
+
+class _ActiveCategoryQuery {
+  final _QueryType type;
+  final String? rankingListId;
+  final String? searchKeyword;
+  final String? channelId;
+  final String? genre;
+  final String? country;
+  final String? year;
+  final String? classify;
+  final String? sort;
+
+  const _ActiveCategoryQuery.rankingList(this.rankingListId)
+      : type = _QueryType.rankingList,
+        searchKeyword = null,
+        channelId = null,
+        genre = null,
+        country = null,
+        year = null,
+        classify = null,
+        sort = null;
+
+  const _ActiveCategoryQuery.search(this.searchKeyword)
+      : type = _QueryType.searchKeyword,
+        rankingListId = null,
+        channelId = null,
+        genre = null,
+        country = null,
+        year = null,
+        classify = null,
+        sort = null;
+
+  const _ActiveCategoryQuery.filter({
+    this.channelId,
+    this.genre,
+    this.country,
+    this.year,
+    this.classify,
+    this.sort,
+  })  : type = _QueryType.subjectFilter,
+        rankingListId = null,
+        searchKeyword = null;
+}
+
 class DynamicFeedSection {
   final String title;
   List<MediaItem> items;
@@ -30,6 +79,13 @@ class DynamicFeedSection {
   final bool isPostList;
   final List<DynamicSubTab>? subTabs;
   int activeSubTabIndex;
+  final String? genreTopId;
+  final String? searchKeyword;
+  final String? channelId;
+  final String? genre;
+  final String? country;
+  final String? classify;
+  final String? sort;
 
   DynamicFeedSection({
     required this.title,
@@ -38,6 +94,13 @@ class DynamicFeedSection {
     this.isPostList = false,
     this.subTabs,
     this.activeSubTabIndex = 0,
+    this.genreTopId,
+    this.searchKeyword,
+    this.channelId,
+    this.genre,
+    this.country,
+    this.classify,
+    this.sort,
   });
 }
 
@@ -46,12 +109,14 @@ class _SectionDescriptor {
   final Future<List<MediaItem>> Function() loader;
   final VoidCallback? onAll;
   final bool isHeroCandidate;
+  final String? searchKeyword;
 
   _SectionDescriptor({
     required this.title,
     required this.loader,
     this.onAll,
     this.isHeroCandidate = false,
+    this.searchKeyword,
   });
 }
 
@@ -108,6 +173,7 @@ class _CategoryTabState {
   List<MediaItem> bottomInfiniteFeed = [];
   int bottomPage = 1;
   bool isLoadingMoreBottom = false;
+  bool hasMoreBottom = true;
 
   // Filter & Pill State
   String selectedPill = 'All';
@@ -120,6 +186,8 @@ class _CategoryTabState {
   List<MediaItem> pagedItems = [];
   int currentPage = 1;
   bool isLoadingMore = false;
+  bool hasMorePagedItems = true;
+  _ActiveCategoryQuery? activeQuery;
 
   final ScrollController scrollController = ScrollController();
   final ScrollController gridScrollController = ScrollController();
@@ -150,6 +218,8 @@ class _CategoryTabState {
     selectedYear = 'All';
     selectedLanguage = 'All';
     selectedSort = (index >= 4) ? 'Popular' : 'ForYou';
+    activeQuery = null;
+    hasMorePagedItems = true;
   }
 
   void invalidate() {
@@ -160,9 +230,11 @@ class _CategoryTabState {
     bottomInfiniteFeed = [];
     bottomPage = 1;
     isLoadingMoreBottom = false;
+    hasMoreBottom = true;
     pagedItems = [];
     currentPage = 1;
     isLoadingMore = false;
+    hasMorePagedItems = true;
     resetFilters();
     if (gridScrollController.hasClients) {
       gridScrollController.jumpTo(0);
@@ -512,7 +584,7 @@ class HomeScreenState extends State<HomeScreen> {
     if (!tab.scrollController.hasClients) return;
     if (tab.scrollController.position.pixels >=
         tab.scrollController.position.maxScrollExtent - 450) {
-      if (tab.isRailsMode && !tab.isLoading && !tab.isLoadingMoreBottom) {
+      if (tab.isRailsMode && !tab.isLoading && !tab.isLoadingMoreBottom && tab.hasMoreBottom) {
         _loadMoreBottomFeed(tab);
       }
     }
@@ -522,7 +594,7 @@ class HomeScreenState extends State<HomeScreen> {
     if (!tab.gridScrollController.hasClients) return;
     if (tab.gridScrollController.position.pixels >=
         tab.gridScrollController.position.maxScrollExtent - 450) {
-      if (!tab.isRailsMode && !tab.isLoading && !tab.isLoadingMore) {
+      if (!tab.isRailsMode && !tab.isLoading && !tab.isLoadingMore && tab.hasMorePagedItems) {
         _loadMorePagedItems(tab);
       }
     }
@@ -781,6 +853,7 @@ class HomeScreenState extends State<HomeScreen> {
       title: title,
       items: items,
       onAll: () => _applyPillFilter(tab, title),
+      genreTopId: genreTopId.isNotEmpty ? genreTopId : null,
     );
   }
 
@@ -924,6 +997,11 @@ class HomeScreenState extends State<HomeScreen> {
             title: cs.title,
             items: cItems,
             onAll: () => _applyPillFilter(tab, cs.title),
+            searchKeyword: (cs.keyword != null && cs.keyword!.isNotEmpty) ? cs.keyword : null,
+            channelId: cs.type == 'tv' ? '2' : (cs.type == 'anime' ? '1006' : '1'),
+            genre: (cs.genre != null && cs.genre != 'All') ? cs.genre : null,
+            country: (cs.country != null && cs.country != 'All') ? cs.country : null,
+            sort: cs.sort,
           ));
         }
       }
@@ -1055,6 +1133,7 @@ class HomeScreenState extends State<HomeScreen> {
               subTabs: subTabs,
               activeSubTabIndex: 0,
               onAll: () => _applyPillFilter(tab, title),
+              genreTopId: subTabs.first.opId,
             ));
             continue;
           }
@@ -1078,6 +1157,7 @@ class HomeScreenState extends State<HomeScreen> {
               items: postItems,
               isPostList: true,
               onAll: () => _applyPillFilter(tab, title),
+              searchKeyword: title,
             ));
             continue;
           }
@@ -1108,6 +1188,7 @@ class HomeScreenState extends State<HomeScreen> {
               title: title,
               items: customItems,
               onAll: () => _applyPillFilter(tab, title),
+              searchKeyword: title,
             ));
             continue;
           }
@@ -1157,6 +1238,7 @@ class HomeScreenState extends State<HomeScreen> {
             title: title,
             items: sectionItems,
             onAll: () => _applyPillFilter(tab, title),
+            genreTopId: genreTopId.isNotEmpty ? genreTopId : null,
           ));
         }
       }
@@ -1231,6 +1313,11 @@ class HomeScreenState extends State<HomeScreen> {
               title: cs.title,
               items: cItems,
               onAll: () => _applyPillFilter(tab, cs.title),
+              searchKeyword: (cs.keyword != null && cs.keyword!.isNotEmpty) ? cs.keyword : null,
+              channelId: cs.type == 'tv' ? '2' : (cs.type == 'anime' ? '1006' : '1'),
+              genre: (cs.genre != null && cs.genre != 'All') ? cs.genre : null,
+              country: (cs.country != null && cs.country != 'All') ? cs.country : null,
+              sort: cs.sort,
             ));
           }
         }
@@ -1632,11 +1719,13 @@ class HomeScreenState extends State<HomeScreen> {
                 }
               }
               if (items.isNotEmpty) {
+                final gTopId = op['genreTopId']?.toString() ?? op['opId']?.toString();
                 _midnightRailCache[title] = items;
                 sections.add(DynamicFeedSection(
                   title: title,
                   items: items,
                   onAll: () => _applyPillFilter(tab, title),
+                  genreTopId: (gTopId != null && gTopId.isNotEmpty) ? gTopId : null,
                 ));
               }
             }
@@ -1809,6 +1898,7 @@ class HomeScreenState extends State<HomeScreen> {
               title: sTitle,
               items: sItems,
               onAll: () => _applyPillFilter(tab, sTitle),
+              searchKeyword: sKeyword,
             ));
             if (heroCandidate.isEmpty) heroCandidate = sItems;
           }
@@ -1836,24 +1926,28 @@ class HomeScreenState extends State<HomeScreen> {
           title: '👑 CEO & Billionaire Romance',
           loader: () => _safeSearch('CEO', perPage: 10),
           onAll: () => _applyPillFilter(tab, 'CEO Romance'),
+          searchKeyword: 'CEO',
         ));
 
         descriptors.add(_SectionDescriptor(
           title: '🐺 Werewolf & Supernatural',
           loader: () => _safeSearch('Werewolf', perPage: 10),
           onAll: () => _applyPillFilter(tab, 'Werewolf'),
+          searchKeyword: 'Werewolf',
         ));
 
         descriptors.add(_SectionDescriptor(
           title: '⚡ Revenge & Drama Series',
           loader: () => _safeSearch('Revenge', perPage: 10),
           onAll: () => _applyPillFilter(tab, 'Revenge'),
+          searchKeyword: 'Revenge',
         ));
 
         descriptors.add(_SectionDescriptor(
           title: '📱 Short Drama Showcase',
           loader: () => _safeSearch('Short Drama', perPage: 10),
           onAll: () => _applyPillFilter(tab, 'Urban Love'),
+          searchKeyword: 'Short Drama',
         ));
         break;
     }
@@ -1871,6 +1965,7 @@ class HomeScreenState extends State<HomeScreen> {
           title: descriptors[i].title,
           items: items,
           onAll: descriptors[i].onAll,
+          searchKeyword: descriptors[i].searchKeyword,
         ));
         if (heroCandidate.isEmpty && descriptors[i].isHeroCandidate) {
           heroCandidate = items;
@@ -1890,42 +1985,103 @@ class HomeScreenState extends State<HomeScreen> {
   // -------------------------------------------------------------
   // Bottom Continuous Infinite Feed Loader
   // -------------------------------------------------------------
-  Future<void> _initBottomFeed(_CategoryTabState tab, int currentToken) async {
-    List<MediaItem> items = [];
-    if (tab.index == 0 || tab.index == 1) {
-      try {
-        items = await widget.apiService.fetchHomeTrending(page: 1, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 2) {
-      try {
-        items = await widget.apiService.fetchMovieTrending(page: 1, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 3) {
-      try {
-        items = await widget.apiService.fetchWebSubjectFilter(
+  static const List<String> _midnightBottomRankingIds = [
+    '8170622407217234072', // Vivamax
+    '8448366367312612120', // 18+ Dramas
+    '7364316894532720656', // Japanese 18+
+    '7462810956096595192', // UllU Drama
+    '4105487575106966448', // Korea 18+
+    '4534646032008989032', // Indian 18+
+    '3436880071141867768', // Porn Top Videos
+  ];
+
+  Future<List<MediaItem>> _fetchBottomFeedChunk(_CategoryTabState tab, int page) async {
+    switch (tab.index) {
+      case 1: // Trending: Alternating Movies & Series with ForYou
+        final chId = (page % 2 == 1) ? '1' : '2';
+        return await widget.apiService.fetchWebSubjectFilter(
+          channelId: chId,
+          sort: 'ForYou',
+          page: (page + 1) ~/ 2,
+          perPage: 18,
+        );
+
+      case 2: // Movie: Clean paginated movies
+        return await widget.apiService.fetchWebSubjectFilter(
+          channelId: '1',
+          sort: 'ForYou',
+          page: page,
+          perPage: 18,
+        );
+
+      case 3: // TV: Clean paginated series
+        return await widget.apiService.fetchWebSubjectFilter(
           channelId: '2',
           sort: 'ForYou',
-          page: 1,
+          page: page,
           perPage: 18,
         );
-      } catch (_) {}
-    } else if (tab.index == 4) {
-      try {
-        items = await widget.apiService.fetchMidnightTrending(page: 1, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 5) {
-      try {
-        items = await widget.apiService.fetchWebSubjectFilter(
+
+      case 4: // MidNight: Cycle through the rich adult ranking lists
+        final listIndex = (page - 1) % _midnightBottomRankingIds.length;
+        final rankingId = _midnightBottomRankingIds[listIndex];
+        final rankPage = ((page - 1) ~/ _midnightBottomRankingIds.length) + 1;
+        return await widget.apiService.fetchRankingList(
+          rankingId,
+          page: rankPage,
+          perPage: 18,
+        );
+
+      case 5: // Anime: Clean paginated anime
+        return await widget.apiService.fetchWebSubjectFilter(
           channelId: '1006',
           sort: 'Popular',
-          page: 1,
+          page: page,
           perPage: 18,
         );
-      } catch (_) {}
-    } else if (tab.index == 6) {
-      try {
-        items = await _safeSearch('Short Drama', page: 1, perPage: 18);
-      } catch (_) {}
+
+      case 6: // ShortTV: Curated mini-drama search pagination
+        final shortKeywords = ['Short Drama', 'CEO', 'Werewolf', 'Revenge'];
+        final kw = shortKeywords[(page - 1) % shortKeywords.length];
+        final kwPage = ((page - 1) ~/ shortKeywords.length) + 1;
+        return await _safeSearch(kw, page: kwPage, perPage: 18);
+
+      default:
+        return await widget.apiService.fetchWebSubjectFilter(
+          channelId: '1',
+          sort: 'Popular',
+          page: page,
+          perPage: 18,
+        );
+    }
+  }
+
+  Future<void> _initBottomFeed(_CategoryTabState tab, int currentToken) async {
+    tab.bottomPage = 1;
+    tab.hasMoreBottom = true;
+
+    final existingIds = <String>{
+      ...tab.heroBanners.map((e) => e.subjectId),
+      ...tab.sections.expand((s) => s.items).map((e) => e.subjectId),
+    };
+
+    List<MediaItem> items = [];
+    int attempts = 0;
+    while (items.length < 12 && attempts < 3) {
+      attempts++;
+      final chunk = await _fetchBottomFeedChunk(tab, tab.bottomPage);
+      if (chunk.isEmpty) {
+        tab.hasMoreBottom = false;
+        break;
+      }
+      for (final item in chunk) {
+        if (item.subjectId.isNotEmpty && existingIds.add(item.subjectId)) {
+          items.add(item);
+        }
+      }
+      if (items.length < 12) {
+        tab.bottomPage++;
+      }
     }
 
     if (mounted && currentToken == tab.loadToken) {
@@ -1934,50 +2090,38 @@ class HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadMoreBottomFeed(_CategoryTabState tab) async {
-    if (tab.isLoadingMoreBottom) return;
+    if (tab.isLoadingMoreBottom || !tab.hasMoreBottom) return;
     setState(() => tab.isLoadingMoreBottom = true);
-    tab.bottomPage++;
 
-    List<MediaItem> nextItems = [];
-    if (tab.index == 0 || tab.index == 1) {
-      try {
-        nextItems = await widget.apiService.fetchHomeTrending(page: tab.bottomPage, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 2) {
-      try {
-        nextItems = await widget.apiService.fetchMovieTrending(page: tab.bottomPage, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 3) {
-      try {
-        nextItems = await widget.apiService.fetchWebSubjectFilter(
-          channelId: '2',
-          sort: 'ForYou',
-          page: tab.bottomPage,
-          perPage: 18,
-        );
-      } catch (_) {}
-    } else if (tab.index == 4) {
-      try {
-        nextItems = await widget.apiService.fetchMidnightTrending(page: tab.bottomPage, perPage: 18);
-      } catch (_) {}
-    } else if (tab.index == 5) {
-      try {
-        nextItems = await widget.apiService.fetchWebSubjectFilter(
-          channelId: '1006',
-          sort: 'Popular',
-          page: tab.bottomPage,
-          perPage: 18,
-        );
-      } catch (_) {}
-    } else if (tab.index == 6) {
-      try {
-        nextItems = await _safeSearch('Short Drama', page: tab.bottomPage, perPage: 18);
-      } catch (_) {}
+    final existingIds = <String>{
+      ...tab.heroBanners.map((e) => e.subjectId),
+      ...tab.sections.expand((s) => s.items).map((e) => e.subjectId),
+      ...tab.bottomInfiniteFeed.map((e) => e.subjectId),
+    };
+
+    List<MediaItem> uniqueItems = [];
+    int attempts = 0;
+
+    while (uniqueItems.length < 12 && attempts < 3) {
+      attempts++;
+      tab.bottomPage++;
+      final chunk = await _fetchBottomFeedChunk(tab, tab.bottomPage);
+      if (chunk.isEmpty) {
+        tab.hasMoreBottom = false;
+        break;
+      }
+      for (final item in chunk) {
+        if (item.subjectId.isNotEmpty && existingIds.add(item.subjectId)) {
+          uniqueItems.add(item);
+        }
+      }
     }
 
     if (mounted) {
       setState(() {
-        tab.bottomInfiniteFeed.addAll(nextItems);
+        if (uniqueItems.isNotEmpty) {
+          tab.bottomInfiniteFeed.addAll(uniqueItems);
+        }
         tab.isLoadingMoreBottom = false;
       });
     }
@@ -1986,7 +2130,42 @@ class HomeScreenState extends State<HomeScreen> {
   // -------------------------------------------------------------
   // Filtered Paged Grid Loader (When category pill or filters active)
   // -------------------------------------------------------------
-  Future<void> _loadPagedCategory(_CategoryTabState tab, int currentToken) async {
+  Future<List<MediaItem>> _fetchItemsForQuery(
+    _ActiveCategoryQuery query, {
+    required int page,
+    int perPage = 18,
+  }) async {
+    switch (query.type) {
+      case _QueryType.rankingList:
+        if (query.rankingListId == null || query.rankingListId!.isEmpty) return [];
+        return await widget.apiService.fetchRankingList(
+          query.rankingListId!,
+          page: page,
+          perPage: perPage,
+        );
+      case _QueryType.searchKeyword:
+        if (query.searchKeyword == null || query.searchKeyword!.isEmpty) return [];
+        return await _safeSearch(
+          query.searchKeyword!,
+          page: page,
+          perPage: perPage,
+        );
+      case _QueryType.subjectFilter:
+        return await widget.apiService.fetchBrowseList(
+          channelId: query.channelId ?? '1',
+          classify: query.classify ?? 'All',
+          country: query.country ?? 'All',
+          year: query.year ?? 'All',
+          genre: query.genre ?? 'All',
+          sort: query.sort ?? 'ForYou',
+          page: page,
+          perPage: perPage,
+        );
+    }
+  }
+
+  _ActiveCategoryQuery _resolveTabQuery(_CategoryTabState tab) {
+    final catalog = widget.storage.activeCatalog;
     String channelId = '1';
     String genre = tab.selectedGenre;
     String country = tab.selectedCountry;
@@ -1994,352 +2173,325 @@ class HomeScreenState extends State<HomeScreen> {
     String classify = tab.selectedLanguage != 'All' ? tab.selectedLanguage : 'All';
     String sort = tab.selectedSort;
 
-    final catalog = widget.storage.activeCatalog;
+    switch (tab.index) {
+      case 0: // Home Tab
+        for (final cs in widget.storage.getHomeCustomSections()) {
+          if (cs.title.toLowerCase().contains(tab.selectedPill.toLowerCase()) ||
+              tab.selectedPill.toLowerCase().contains(cs.title.toLowerCase())) {
+            if (cs.keyword != null && cs.keyword!.isNotEmpty) {
+              return _ActiveCategoryQuery.search(cs.keyword!);
+            } else {
+              String ch = '1';
+              if (cs.type == 'tv') ch = '2';
+              if (cs.type == 'anime') ch = '1006';
+              return _ActiveCategoryQuery.filter(
+                channelId: ch,
+                genre: (cs.genre != null && cs.genre != 'All') ? cs.genre! : 'All',
+                country: (cs.country != null && cs.country != 'All') ? cs.country! : 'All',
+                year: (cs.year != null && cs.year != 'All') ? cs.year! : 'All',
+                sort: cs.sort,
+              );
+            }
+          }
+        }
+        return _ActiveCategoryQuery.search(tab.selectedPill);
 
-    // 1. Fast in-memory resolution: If user tapped "All" on a rail already in tab.sections, display immediately (0ms!)
+      case 1: // Trending Tab
+        final pLower = tab.selectedPill.toLowerCase();
+        if (pLower.contains('bangla') || pLower.contains('bengali')) {
+          return const _ActiveCategoryQuery.filter(channelId: '2', country: 'Bangladesh', classify: 'Bengali dub');
+        } else if (pLower.contains('bollywood') || pLower.contains('hindi')) {
+          return const _ActiveCategoryQuery.filter(channelId: '1', country: 'India', classify: 'Hindi dub');
+        } else if (pLower.contains('south indian') || pLower.contains('tamil') || pLower.contains('telugu')) {
+          return const _ActiveCategoryQuery.filter(channelId: '1', country: 'India');
+        } else if (pLower.contains('hollywood')) {
+          return const _ActiveCategoryQuery.filter(channelId: '1', country: 'United States');
+        } else if (pLower.contains('k-drama') || pLower.contains('korea')) {
+          return const _ActiveCategoryQuery.filter(channelId: '2', country: 'Korea');
+        } else if (pLower.contains('c-drama') || pLower.contains('china')) {
+          return const _ActiveCategoryQuery.filter(channelId: '2', country: 'China');
+        } else if (pLower.contains('anime')) {
+          return const _ActiveCategoryQuery.filter(channelId: '1006');
+        } else if (pLower.contains('short')) {
+          return const _ActiveCategoryQuery.search('Short Drama');
+        }
+        return _ActiveCategoryQuery.search(tab.selectedPill);
+
+      case 2: // Movie Tab
+        channelId = '1';
+        if (tab.selectedPill != 'All') {
+          if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
+            if (catalog.classify != null) classify = catalog.classify!;
+            if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
+          } else if (tab.selectedPill == 'Trending in Cinema') {
+            sort = 'ForYou';
+          } else if (tab.selectedPill == 'Top Movies') {
+            sort = 'Popular';
+          } else if (tab.selectedPill == 'New Release' || tab.selectedPill == 'Latest') {
+            sort = 'Latest';
+          } else if (_movieGenres.contains(tab.selectedPill)) {
+            genre = tab.selectedPill;
+          } else if (tab.selectedPill == 'Bollywood Love') {
+            country = 'India';
+            genre = 'Romance';
+          } else if (tab.selectedPill == 'Comedies') {
+            genre = 'Comedy';
+          } else if (tab.selectedPill == 'Thrills & Crimes') {
+            genre = 'Thriller';
+          } else if (tab.selectedPill == 'Super Hero') {
+            return const _ActiveCategoryQuery.search('Superhero');
+          } else if (tab.selectedPill == 'Sci-Fi Future') {
+            genre = 'Sci-Fi';
+          }
+        }
+        return _ActiveCategoryQuery.filter(
+          channelId: channelId,
+          genre: genre,
+          country: country,
+          year: year,
+          classify: classify,
+          sort: sort,
+        );
+
+      case 3: // TV Tab
+        channelId = '2';
+        if (tab.selectedPill != 'All') {
+          if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
+            if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
+            if (catalog.classify != null) classify = catalog.classify!;
+          } else if (tab.selectedPill == 'K-Drama' || tab.selectedPill == 'Best Asian Dramas') {
+            country = 'Korea';
+          } else if (tab.selectedPill == 'C-Drama') {
+            country = 'China';
+          } else if (tab.selectedPill == 'Turkish Drama') {
+            country = 'Turkey';
+          } else if (tab.selectedPill == 'Pakistani TV') {
+            country = 'Pakistan';
+          } else if (tab.selectedPill == 'Western TV' || tab.selectedPill == 'US Dramas') {
+            country = 'United States';
+          } else if (tab.selectedPill == 'Indian Dramas') {
+            country = 'India';
+          } else if (tab.selectedPill == 'Crime & Mystery') {
+            genre = 'Crime';
+          } else if (tab.selectedPill == 'Sci-Fi & Fantasy') {
+            genre = 'Sci-Fi';
+          } else if (tab.selectedPill == 'Comedy Shows') {
+            genre = 'Comedy';
+          } else if (tab.selectedPill == 'Top Series') {
+            sort = 'Popular';
+          }
+        }
+        return _ActiveCategoryQuery.filter(
+          channelId: channelId,
+          genre: genre,
+          country: country,
+          year: year,
+          classify: classify,
+          sort: sort,
+        );
+
+      case 4: // MidNight🔞 Tab
+        final p = tab.selectedPill;
+        if (p == 'Vivamax' || p.toLowerCase().contains('vivamax')) {
+          return const _ActiveCategoryQuery.rankingList('8170622407217234072');
+        } else if (p == 'UllU Drama' || p.toLowerCase().contains('ullu drama')) {
+          return const _ActiveCategoryQuery.rankingList('7462810956096595192');
+        } else if (p == 'UllU Movie' || p.toLowerCase().contains('ullu movie')) {
+          return const _ActiveCategoryQuery.rankingList('3613148068369032104');
+        } else if (p == '18+ Dramas' || p.toLowerCase().contains('18+ drama')) {
+          return const _ActiveCategoryQuery.rankingList('8448366367312612120');
+        } else if (p == 'Porn Top Videos' || p.toLowerCase().contains('porn top')) {
+          return const _ActiveCategoryQuery.rankingList('3436880071141867768');
+        } else if (p == 'Late-night Shorts' || p.toLowerCase().contains('late-night')) {
+          return const _ActiveCategoryQuery.rankingList('4283712533380449360');
+        } else if (p == 'Hentai Anime' || p.toLowerCase().contains('hentai')) {
+          return const _ActiveCategoryQuery.rankingList('1846783103277105520');
+        } else if (p == 'Indian 18+' || p.toLowerCase().contains('indian 18+')) {
+          return const _ActiveCategoryQuery.rankingList('4534646032008989032');
+        } else if (p == 'Japanese 18+' || p.toLowerCase().contains('japanese 18+')) {
+          return const _ActiveCategoryQuery.rankingList('7364316894532720656');
+        } else if (p == 'Korea 18+' || p.toLowerCase().contains('korea 18+')) {
+          return const _ActiveCategoryQuery.rankingList('4105487575106966448');
+        } else if (p == 'Chinese 18+' || p.toLowerCase().contains('chinese 18+')) {
+          return const _ActiveCategoryQuery.rankingList('3628141198977782704');
+        } else if (p == 'Tbonx' || p.toLowerCase().contains('tbonx')) {
+          return const _ActiveCategoryQuery.rankingList('4543422163096946912');
+        } else if (p == 'Cinepop' || p.toLowerCase().contains('cinepop')) {
+          return const _ActiveCategoryQuery.rankingList('8805880198798493664');
+        }
+        if (p != 'All') {
+          return _ActiveCategoryQuery.search(p);
+        }
+        return const _ActiveCategoryQuery.rankingList('8170622407217234072');
+
+      case 5: // Anime Tab
+        channelId = '1006';
+        if (tab.selectedPill == 'Anime Movies') {
+          channelId = '1';
+          genre = 'Animation';
+          sort = 'HighRating';
+        } else if (tab.selectedPill == 'Action & Shonen') {
+          genre = 'Action';
+        } else if (tab.selectedPill == 'Fantasy & Isekai') {
+          genre = 'Fantasy';
+        } else if (tab.selectedPill == 'Romance & Life') {
+          genre = 'Romance';
+        } else if (tab.selectedPill == 'Sci-Fi & Cyberpunk') {
+          genre = 'Sci-Fi';
+        } else if (tab.selectedPill == 'Comedy Anime') {
+          genre = 'Comedy';
+        } else if (tab.selectedPill == 'Top Anime Series') {
+          sort = 'Popular';
+        } else if (tab.selectedPill == 'Must-Watch Anime') {
+          sort = 'HighRating';
+        }
+        return _ActiveCategoryQuery.filter(
+          channelId: channelId,
+          genre: genre,
+          country: country,
+          year: year,
+          classify: classify,
+          sort: sort,
+        );
+
+      case 6: // ShortTV Tab
+        String keyword = tab.selectedPill;
+        if (tab.selectedPill == 'CEO Romance') keyword = 'CEO';
+        if (tab.selectedPill == 'Werewolf') keyword = 'Werewolf';
+        if (tab.selectedPill == 'Revenge') keyword = 'Revenge';
+        if (tab.selectedPill == 'Short Drama' || tab.selectedPill == 'Hot Short TV' || tab.selectedPill == 'All') {
+          keyword = 'Short Drama';
+        }
+        return _ActiveCategoryQuery.search(keyword);
+
+      default:
+        return _ActiveCategoryQuery.search(tab.selectedPill);
+    }
+  }
+
+  Future<void> _loadPagedCategory(_CategoryTabState tab, int currentToken) async {
+    tab.hasMorePagedItems = true;
+    _ActiveCategoryQuery? query;
+
+    // 1. Check if user tapped a rail ("All") that exists in tab.sections
+    if (tab.selectedPill != 'All') {
+      DynamicFeedSection? matchedSection;
+      for (final s in tab.sections) {
+        if (s.title.toLowerCase().trim() == tab.selectedPill.toLowerCase().trim() ||
+            s.title.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
+          matchedSection = s;
+          break;
+        }
+      }
+
+      if (matchedSection != null) {
+        if (matchedSection.genreTopId != null && matchedSection.genreTopId!.isNotEmpty) {
+          query = _ActiveCategoryQuery.rankingList(matchedSection.genreTopId!);
+        } else if (matchedSection.searchKeyword != null && matchedSection.searchKeyword!.isNotEmpty) {
+          query = _ActiveCategoryQuery.search(matchedSection.searchKeyword!);
+        } else if (matchedSection.channelId != null || matchedSection.genre != null || matchedSection.country != null) {
+          query = _ActiveCategoryQuery.filter(
+            channelId: matchedSection.channelId ?? (tab.index == 3 ? '2' : (tab.index == 5 ? '1006' : '1')),
+            genre: matchedSection.genre ?? 'All',
+            country: matchedSection.country ?? 'All',
+            classify: matchedSection.classify ?? 'All',
+            sort: matchedSection.sort ?? (tab.index >= 4 ? 'Popular' : 'ForYou'),
+          );
+        }
+      }
+    }
+
+    // 2. If no section query matched, resolve based on tab index and selectedPill / dropdown filters
+    query ??= _resolveTabQuery(tab);
+    tab.activeQuery = query;
+
+    // 3. Fast in-memory resolution for instant display if rail items exist
+    List<MediaItem> initialItems = [];
     if (tab.selectedPill != 'All') {
       for (final s in tab.sections) {
         if (s.title.toLowerCase().trim() == tab.selectedPill.toLowerCase().trim() ||
             s.title.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
           if (s.items.isNotEmpty) {
-            if (mounted && currentToken == tab.loadToken) {
+            initialItems = List.from(s.items);
+            break;
+          }
+        }
+      }
+    }
+
+    if (initialItems.isNotEmpty) {
+      if (mounted && currentToken == tab.loadToken) {
+        setState(() {
+          tab.pagedItems = initialItems;
+          tab.isLoading = false;
+        });
+      }
+      // If the rail only had preview items (e.g. <= 6), proactively fetch page 1 to fill out the grid
+      if (initialItems.length < 15) {
+        try {
+          final fetched = await _fetchItemsForQuery(query, page: 1, perPage: 18);
+          if (mounted && currentToken == tab.loadToken && fetched.isNotEmpty) {
+            final existing = tab.pagedItems.map((e) => e.subjectId).toSet();
+            final unique = fetched.where((e) => e.subjectId.isNotEmpty && existing.add(e.subjectId)).toList();
+            if (unique.isNotEmpty) {
               setState(() {
-                tab.pagedItems = List.from(s.items);
-                tab.isLoading = false;
+                tab.pagedItems.addAll(unique);
               });
             }
-            return;
           }
-        }
-      }
-    }
-
-    if (tab.index == 0) {
-      for (final entry in _homeCustomRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-      final searchItems = await _safeSearch(tab.selectedPill, perPage: 18);
-      if (mounted && currentToken == tab.loadToken) {
-        setState(() {
-          tab.pagedItems = searchItems;
-          tab.isLoading = false;
-        });
+        } catch (_) {}
       }
       return;
     }
 
-    if (tab.index == 1) {
-      for (final entry in _homeRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-      final searchItems = await _safeSearch(tab.selectedPill, perPage: 18);
-      if (mounted && currentToken == tab.loadToken) {
-        setState(() {
-          tab.pagedItems = searchItems;
-          tab.isLoading = false;
-        });
-      }
-      return;
-    }
-
-    if (tab.index == 2) {
-      for (final entry in _movieRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-
-      channelId = '1';
-      if (tab.selectedPill != 'All') {
-        if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
-          if (catalog.classify != null) classify = catalog.classify!;
-          if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
-        } else if (tab.selectedPill == 'Trending in Cinema') {
-          sort = 'ForYou';
-        } else if (tab.selectedPill == 'Top Movies') {
-          sort = 'Popular';
-        } else if (tab.selectedPill == 'New Release' || tab.selectedPill == 'Latest') {
-          sort = 'Latest';
-        } else if (tab.selectedPill == 'Action' || tab.selectedPill == 'Horror' || tab.selectedPill == 'Romance' || tab.selectedPill == 'Comedy' || tab.selectedPill == 'Sci-Fi' || tab.selectedPill == 'Adventure' || tab.selectedPill == 'Fantasy' || tab.selectedPill == 'Crime' || tab.selectedPill == 'Thriller') {
-          genre = tab.selectedPill;
-        }
-      }
-    } else if (tab.index == 3) {
-      for (final entry in _tvRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-
-      channelId = '2';
-      if (tab.selectedPill != 'All') {
-        if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains(catalog.name.split(" (").first)) {
-          if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
-          if (catalog.classify != null) classify = catalog.classify!;
-        } else if (tab.selectedPill == 'K-Drama') {
-          country = 'Korea';
-        } else if (tab.selectedPill == 'C-Drama') {
-          country = 'China';
-        } else if (tab.selectedPill == 'Turkish Drama') {
-          country = 'Turkey';
-        } else if (tab.selectedPill == 'Pakistani TV') {
-          country = 'Pakistan';
-        } else if (tab.selectedPill == 'Crime & Mystery') {
-          genre = 'Crime';
-        } else if (tab.selectedPill == 'Sci-Fi & Fantasy') {
-          genre = 'Sci-Fi';
-        } else if (tab.selectedPill == 'Comedy Shows') {
-          genre = 'Comedy';
-        }
-      }
-    } else if (tab.index == 4) {
-      for (final entry in _midnightRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-
-      final searchItems = tab.selectedPill == 'All'
-          ? await widget.apiService.fetchMidnightTrending(page: 1, perPage: 18)
-          : await _safeSearch(tab.selectedPill, perPage: 18);
-      if (mounted && currentToken == tab.loadToken) {
-        setState(() {
-          tab.pagedItems = searchItems;
-          tab.isLoading = false;
-        });
-      }
-      return;
-    } else if (tab.index == 5) {
-      for (final entry in _animeRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-
-      channelId = '1006';
-      if (tab.selectedPill == 'Anime Movies') {
-        channelId = '1';
-        genre = 'Animation';
-      } else if (tab.selectedPill == 'Action & Shonen') {
-        genre = 'Action';
-      } else if (tab.selectedPill == 'Fantasy & Isekai') {
-        genre = 'Fantasy';
-      } else if (tab.selectedPill == 'Romance & Life') {
-        genre = 'Romance';
-      } else if (tab.selectedPill == 'Sci-Fi & Cyberpunk') {
-        genre = 'Sci-Fi';
-      } else if (tab.selectedPill == 'Comedy Anime') {
-        genre = 'Comedy';
-      }
-    } else if (tab.index == 6) {
-      for (final entry in _shortTvRailCache.entries) {
-        if (entry.key.toLowerCase().contains(tab.selectedPill.toLowerCase())) {
-          if (mounted && currentToken == tab.loadToken) {
-            setState(() {
-              tab.pagedItems = entry.value;
-              tab.isLoading = false;
-            });
-          }
-          return;
-        }
-      }
-
-      String keyword = tab.selectedPill;
-      if (tab.selectedPill == 'CEO Romance') keyword = 'CEO';
-      if (tab.selectedPill == 'Werewolf') keyword = 'Werewolf';
-      if (tab.selectedPill == 'Revenge') keyword = 'Revenge';
-      if (tab.selectedPill == 'Short Drama') keyword = 'Short Drama';
-
-      final items = await _safeSearch(keyword, perPage: 18);
-      if (mounted && currentToken == tab.loadToken) {
-        setState(() {
-          tab.pagedItems = items;
-          tab.isLoading = false;
-        });
-      }
-      return;
-    }
-
+    // 4. Otherwise fetch Page 1 fresh
     try {
-      final items = await widget.apiService.fetchBrowseList(
-        channelId: channelId,
-        classify: classify,
-        country: country,
-        year: year,
-        genre: genre,
-        sort: sort,
-        page: 1,
-        perPage: 18,
-      );
-
+      final items = await _fetchItemsForQuery(query, page: 1, perPage: 18);
       if (mounted && currentToken == tab.loadToken) {
         setState(() {
           tab.pagedItems = items;
           tab.isLoading = false;
+          if (items.isEmpty) tab.hasMorePagedItems = false;
         });
       }
     } catch (_) {
-      if (mounted && currentToken == tab.loadToken) setState(() => tab.isLoading = false);
+      if (mounted && currentToken == tab.loadToken) {
+        setState(() {
+          tab.isLoading = false;
+        });
+      }
     }
   }
 
   Future<void> _loadMorePagedItems(_CategoryTabState tab) async {
-    if (tab.isLoadingMore) return;
+    if (tab.isLoadingMore || !tab.hasMorePagedItems) return;
     setState(() => tab.isLoadingMore = true);
     tab.currentPage++;
 
-    String channelId = '1';
-    String genre = tab.selectedGenre;
-    String country = tab.selectedCountry;
-    String year = tab.selectedYear;
-    String classify = tab.selectedLanguage != 'All' ? tab.selectedLanguage : 'All';
-    String sort = tab.selectedSort;
-
-    final catalog = widget.storage.activeCatalog;
-
-    if (tab.index == 1) {
-      if (tab.selectedPill != 'All') {
-        final items = await widget.apiService.fetchHomeTrending(page: tab.currentPage, perPage: 18);
-        if (mounted) {
-          setState(() {
-            tab.pagedItems.addAll(items);
-            tab.isLoadingMore = false;
-          });
-        }
-        return;
-      }
-      channelId = '1';
-    } else if (tab.index == 2) {
-      if (tab.selectedPill != 'All') {
-        final items = await widget.apiService.fetchMovieTrending(page: tab.currentPage, perPage: 18);
-        if (mounted) {
-          setState(() {
-            tab.pagedItems.addAll(items);
-            tab.isLoadingMore = false;
-          });
-        }
-        return;
-      }
-      channelId = '1';
-    } else if (tab.index == 3) {
-      channelId = '2';
-      if (tab.selectedPill != 'All') {
-        if (tab.selectedPill.contains(catalog.flag) || tab.selectedPill.contains('Local Series')) {
-          if (catalog.defaultCountry != null) country = catalog.defaultCountry!;
-          if (catalog.classify != null) classify = catalog.classify!;
-        } else if (tab.selectedPill == 'K-Drama') {
-          country = 'Korea';
-        } else if (tab.selectedPill == 'C-Drama') {
-          country = 'China';
-        } else if (tab.selectedPill == 'US Dramas') {
-          country = 'United States';
-        } else if (tab.selectedPill == 'Crime') {
-          genre = 'Crime';
-        } else if (tab.selectedPill == 'Comedy') {
-          genre = 'Comedy';
-        } else if (tab.selectedPill == 'Latest') {
-          sort = 'Latest';
-        }
-      }
-    } else if (tab.index == 4) {
-      final items = await widget.apiService.fetchMidnightTrending(page: tab.currentPage, perPage: 18);
-      if (mounted) {
-        setState(() {
-          tab.pagedItems.addAll(items);
-          tab.isLoadingMore = false;
-        });
-      }
-      return;
-    } else if (tab.index == 5) {
-      channelId = '1006';
-      if (tab.selectedPill == 'Movies' || tab.selectedPill == 'Anime Movies') {
-        channelId = '1';
-        genre = 'Animation';
-      } else if (tab.selectedPill != 'All' && tab.selectedPill != 'Trending') {
-        genre = tab.selectedPill;
-      }
-    } else if (tab.index == 6) {
-      channelId = '2';
-      if (tab.selectedPill == 'CEO Romance') {
-        final items = await widget.apiService.search('CEO', page: tab.currentPage, perPage: 18);
-        if (mounted) setState(() { tab.pagedItems.addAll(items); tab.isLoadingMore = false; });
-        return;
-      } else if (tab.selectedPill == 'Werewolf') {
-        final items = await widget.apiService.search('Werewolf', page: tab.currentPage, perPage: 18);
-        if (mounted) setState(() { tab.pagedItems.addAll(items); tab.isLoadingMore = false; });
-        return;
-      } else if (tab.selectedPill == 'Revenge') {
-        final items = await widget.apiService.search('Revenge', page: tab.currentPage, perPage: 18);
-        if (mounted) setState(() { tab.pagedItems.addAll(items); tab.isLoadingMore = false; });
-        return;
-      } else if (tab.selectedPill == 'Urban Love' || tab.selectedPill == 'Short Drama') {
-        final items = await widget.apiService.search('Short Drama', page: tab.currentPage, perPage: 18);
-        if (mounted) setState(() { tab.pagedItems.addAll(items); tab.isLoadingMore = false; });
-        return;
-      }
-      genre = 'Reality';
-    }
+    final query = tab.activeQuery ?? _resolveTabQuery(tab);
+    tab.activeQuery = query;
 
     try {
-      final nextItems = await widget.apiService.fetchBrowseList(
-        channelId: channelId,
-        classify: classify,
-        country: country,
-        year: year,
-        genre: genre,
-        sort: sort,
-        page: tab.currentPage,
-        perPage: 18,
-      );
-
+      final nextItems = await _fetchItemsForQuery(query, page: tab.currentPage, perPage: 18);
       if (mounted) {
+        final existingIds = tab.pagedItems.map((e) => e.subjectId).toSet();
+        final uniqueItems = nextItems.where((e) => e.subjectId.isNotEmpty && existingIds.add(e.subjectId)).toList();
+
+        if (nextItems.isEmpty || (nextItems.isNotEmpty && uniqueItems.isEmpty && tab.currentPage > 2)) {
+          tab.hasMorePagedItems = false;
+        }
+
         setState(() {
-          tab.pagedItems.addAll(nextItems);
+          if (uniqueItems.isNotEmpty) {
+            tab.pagedItems.addAll(uniqueItems);
+          }
           tab.isLoadingMore = false;
         });
       }
     } catch (_) {
-      if (mounted) setState(() => tab.isLoadingMore = false);
+      if (mounted) {
+        setState(() => tab.isLoadingMore = false);
+      }
     }
   }
 

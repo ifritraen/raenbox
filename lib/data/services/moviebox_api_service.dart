@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../../core/network/moviebox_signer.dart';
 import '../models/moviebox_models.dart';
@@ -24,8 +25,9 @@ class MovieBoxApiService {
   MovieBoxApiService(this._storage);
 
   String? _token;
+  String? _lastTokenRegion;
 
-  Future<void> _extractAndSaveToken(http.Response response) async {
+  Future<void> _extractAndSaveToken(http.Response response, {String? region}) async {
     final xUser = response.headers['x-user'];
     if (xUser != null && xUser.isNotEmpty) {
       try {
@@ -33,6 +35,7 @@ class MovieBoxApiService {
         final token = decoded['token']?.toString();
         if (token != null && token.isNotEmpty) {
           _token = token;
+          _lastTokenRegion = region ?? _storage.activeRegion;
           await _storage.setCachedToken(token);
         }
       } catch (_) {}
@@ -40,8 +43,9 @@ class MovieBoxApiService {
   }
 
   /// Proactively ensures a valid Bearer token is available for playback requests
-  Future<String?> ensureValidToken({bool forceRefresh = false}) async {
-    if (!forceRefresh) {
+  Future<String?> ensureValidToken({bool forceRefresh = false, String? region}) async {
+    final targetRegion = region ?? _storage.activeRegion;
+    if (!forceRefresh && _lastTokenRegion == targetRegion) {
       if (_token != null && _token!.isNotEmpty) return _token;
       final cached = _storage.cachedToken;
       if (cached != null && cached.isNotEmpty) {
@@ -59,12 +63,12 @@ class MovieBoxApiService {
           url: fullUrl,
           method: 'GET',
           token: null,
-          region: _storage.activeRegion,
+          region: targetRegion,
         );
         final response = await _client
             .get(Uri.parse(fullUrl), headers: headers)
             .timeout(const Duration(seconds: 4));
-        await _extractAndSaveToken(response);
+        await _extractAndSaveToken(response, region: targetRegion);
         if (_token != null && _token!.isNotEmpty) {
           return _token;
         }
@@ -81,13 +85,13 @@ class MovieBoxApiService {
     String? overrideRegion,
     bool canRetry = true,
   }) async {
-    if (isPlayback && _token == null && _storage.cachedToken == null) {
-      await ensureValidToken();
+    final region = overrideRegion ?? _storage.activeRegion;
+    if (isPlayback && (_token == null || _lastTokenRegion != region)) {
+      await ensureValidToken(region: region);
     }
 
-    final token = _token ?? _storage.cachedToken;
+    final token = (_lastTokenRegion == region) ? (_token ?? _storage.cachedToken) : null;
     final bodyStr = bodyMap != null ? json.encode(bodyMap) : null;
-    final region = overrideRegion ?? _storage.activeRegion;
 
     for (final host in gateways) {
       final fullUrl = '$host$pathWithQuery';
@@ -110,12 +114,12 @@ class MovieBoxApiService {
                 .get(uri, headers: headers)
                 .timeout(const Duration(seconds: 4));
 
-        await _extractAndSaveToken(response);
+        await _extractAndSaveToken(response, region: region);
 
         if (response.statusCode == 200) {
           return response;
         } else if (response.statusCode == 441 && canRetry) {
-          await ensureValidToken(forceRefresh: true);
+          await ensureValidToken(forceRefresh: true, region: region);
           return _request(
             pathWithQuery: pathWithQuery,
             method: method,
@@ -366,6 +370,28 @@ class MovieBoxApiService {
       }
     } catch (_) {}
 
+    // Universal Cross-Region Detail Fallback Cascade (IN, GLOBAL)
+    final activeReg = _storage.activeRegion.toUpperCase();
+    final fallbackRegions = ['IN', 'GLOBAL']
+        .where((r) => r != activeReg && (r != 'GLOBAL' || activeReg != 'US'))
+        .toList();
+
+    for (final fbRegion in fallbackRegions) {
+      try {
+        final path = '/wefeed-mobile-bff/subject-api/get?subjectId=$subjectId';
+        final fbRes = await _request(pathWithQuery: path, method: 'GET', overrideRegion: fbRegion);
+        if (fbRes != null && fbRes.statusCode == 200) {
+          final root = json.decode(utf8.decode(fbRes.bodyBytes));
+          if (root['code'] == 0 && root['data'] != null) {
+            final data = root['data'] as Map<String, dynamic>;
+            _detailCache[subjectId] = data;
+            debugPrint('[MovieBoxAPI] Detail found via fallback region: $fbRegion for subject $subjectId');
+            return MediaDetail.fromJson(data);
+          }
+        }
+      } catch (_) {}
+    }
+
     return null;
   }
 
@@ -462,6 +488,58 @@ class MovieBoxApiService {
   }
 
   // 6. Fetch Playback Streams (Decodes real stream from signCookie & fetches subtitles)
+  Future<List<StreamLink>> _parseStreamList(String subjectId, List rawStreams) async {
+    final streamList = <StreamLink>[];
+    final captionFutures = <Future<List<CaptionTrack>>>[];
+    for (final s in rawStreams) {
+      final map = s as Map<String, dynamic>;
+      final rawUrl = map['url']?.toString() ?? '';
+      final signCookie = map['signCookie']?.toString();
+      final streamId = map['id']?.toString() ?? '';
+
+      // Extract real full DASH / HLS stream URL hidden inside CloudFront-Policy or urlprefix
+      final resolvedUrl = MovieBoxSigner.extractRealStreamUrl(rawUrl, signCookie);
+
+      streamList.add(StreamLink.fromJson(map, resolvedUrl: resolvedUrl));
+      if (streamId.isNotEmpty) {
+        captionFutures.add(
+          fetchCaptions(subjectId: subjectId, streamId: streamId)
+              .timeout(const Duration(seconds: 2), onTimeout: () => []),
+        );
+      } else {
+        captionFutures.add(Future.value([]));
+      }
+    }
+
+    try {
+      final results = await Future.wait(captionFutures);
+      for (var i = 0; i < streamList.length && i < results.length; i++) {
+        if (results[i].isNotEmpty) {
+          final link = streamList[i];
+          streamList[i] = StreamLink(
+            id: link.id,
+            format: link.format,
+            resolutions: link.resolutions,
+            rawUrl: link.rawUrl,
+            url: link.url,
+            signCookie: link.signCookie,
+            duration: link.duration,
+            captions: results[i],
+          );
+        }
+      }
+    } catch (_) {}
+
+    // Prioritize real streams over dummy preview clips and filter them out if real ones exist
+    final realStreams = streamList.where((s) => s.isRealStream).toList();
+    if (realStreams.isNotEmpty) {
+      return realStreams;
+    }
+
+    return streamList;
+  }
+
+  // 6. Fetch Playback Streams (Decodes real stream from signCookie, fetches subtitles & auto cross-region fallback)
   Future<List<StreamLink>> fetchPlayInfo(
     String subjectId, {
     int season = 0,
@@ -471,81 +549,56 @@ class MovieBoxApiService {
 
     final path =
         '/wefeed-mobile-bff/subject-api/play-info?subjectId=$subjectId&se=$season&ep=$episode';
-    var res = await _request(pathWithQuery: path, method: 'GET', isPlayback: true);
-    if (res == null) {
-      return await _fetchWebPlayInfo(subjectId, season: season, episode: episode);
-    }
 
+    // 1. Try active user region first
     try {
-      var root = json.decode(utf8.decode(res.bodyBytes));
-      if (root['code'] == 441) {
-        // Token was invalid / expired, force refresh and retry once
-        await ensureValidToken(forceRefresh: true);
-        res = await _request(pathWithQuery: path, method: 'GET', isPlayback: true, canRetry: false);
-        if (res == null) {
-          return await _fetchWebPlayInfo(subjectId, season: season, episode: episode);
+      var res = await _request(pathWithQuery: path, method: 'GET', isPlayback: true);
+      if (res != null) {
+        var root = json.decode(utf8.decode(res.bodyBytes));
+        if (root['code'] == 441) {
+          await ensureValidToken(forceRefresh: true);
+          res = await _request(pathWithQuery: path, method: 'GET', isPlayback: true, canRetry: false);
+          if (res != null) {
+            root = json.decode(utf8.decode(res.bodyBytes));
+          }
         }
-        root = json.decode(utf8.decode(res.bodyBytes));
-      }
 
-      final rawStreams = root['data']?['streams'] as List?;
-      if (rawStreams == null || rawStreams.isEmpty) {
-        final webStreams = await _fetchWebPlayInfo(subjectId, season: season, episode: episode);
-        if (webStreams.isNotEmpty) return webStreams;
-        return [];
-      }
-
-      final streamList = <StreamLink>[];
-      final captionFutures = <Future<List<CaptionTrack>>>[];
-      for (final s in rawStreams) {
-        final map = s as Map<String, dynamic>;
-        final rawUrl = map['url']?.toString() ?? '';
-        final signCookie = map['signCookie']?.toString();
-        final streamId = map['id']?.toString() ?? '';
-
-        // Extract real full DASH / HLS stream URL hidden inside CloudFront-Policy or urlprefix
-        final resolvedUrl = MovieBoxSigner.extractRealStreamUrl(rawUrl, signCookie);
-
-        streamList.add(StreamLink.fromJson(map, resolvedUrl: resolvedUrl));
-        if (streamId.isNotEmpty) {
-          captionFutures.add(
-            fetchCaptions(subjectId: subjectId, streamId: streamId)
-                .timeout(const Duration(seconds: 2), onTimeout: () => []),
-          );
-        } else {
-          captionFutures.add(Future.value([]));
+        final rawStreams = root['data']?['streams'] as List?;
+        if (rawStreams != null && rawStreams.isNotEmpty) {
+          final parsed = await _parseStreamList(subjectId, rawStreams);
+          if (parsed.isNotEmpty) return parsed;
         }
       }
+    } catch (_) {}
 
+    // 2. Universal Cross-Region Stream Fallback Cascade (IN, GLOBAL)
+    final activeReg = _storage.activeRegion.toUpperCase();
+    final fallbackRegions = ['IN', 'GLOBAL']
+        .where((r) => r != activeReg && (r != 'GLOBAL' || activeReg != 'US'))
+        .toList();
+
+    for (final fbRegion in fallbackRegions) {
       try {
-        final results = await Future.wait(captionFutures);
-        for (var i = 0; i < streamList.length && i < results.length; i++) {
-          if (results[i].isNotEmpty) {
-            final link = streamList[i];
-            streamList[i] = StreamLink(
-              id: link.id,
-              format: link.format,
-              resolutions: link.resolutions,
-              rawUrl: link.rawUrl,
-              url: link.url,
-              signCookie: link.signCookie,
-              duration: link.duration,
-              captions: results[i],
-            );
+        final fbRes = await _request(
+          pathWithQuery: path,
+          method: 'GET',
+          isPlayback: true,
+          overrideRegion: fbRegion,
+        );
+        if (fbRes != null && fbRes.statusCode == 200) {
+          final fbRoot = json.decode(utf8.decode(fbRes.bodyBytes));
+          final fbRawStreams = fbRoot['data']?['streams'] as List?;
+          if (fbRawStreams != null && fbRawStreams.isNotEmpty) {
+            debugPrint('[MovieBoxAPI] Stream unlocked via fallback region: $fbRegion for subject $subjectId');
+            final parsed = await _parseStreamList(subjectId, fbRawStreams);
+            if (parsed.isNotEmpty) return parsed;
           }
         }
       } catch (_) {}
-
-      // Prioritize real streams over dummy preview clips and filter them out if real ones exist
-      final realStreams = streamList.where((s) => s.isRealStream).toList();
-      if (realStreams.isNotEmpty) {
-        return realStreams;
-      }
-
-      return streamList;
-    } catch (_) {
-      return await _fetchWebPlayInfo(subjectId, season: season, episode: episode);
     }
+
+    // 3. Fallback to Web BFF endpoints
+    return await _fetchWebPlayInfo(subjectId, season: season, episode: episode);
   }
 
   // 7. Fetch Stream Captions (Subtitles)
