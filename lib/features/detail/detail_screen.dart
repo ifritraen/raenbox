@@ -2729,7 +2729,7 @@ class _DetailScreenState extends State<DetailScreen> with WidgetsBindingObserver
             ),
             const SizedBox(width: 6),
             const Text(
-              'Uploaded by MovieBox HQ',
+              'Uploaded by RaenBox HQ',
               style: TextStyle(
                 color: AppTheme.textSecondary,
                 fontSize: 11,

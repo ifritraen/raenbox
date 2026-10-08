@@ -1,4 +1,4 @@
-# RaenBox (MovieBox+)
+# RaenBox
 
 A premier, high-performance streaming and media application built with Flutter & Dart, supporting multiple video protocols, DASH dynamic chunk streams, Anime4K GLSL shader upscaling, multi-threaded IDM downloads, picture-in-picture, and interactive gesture controls.
 

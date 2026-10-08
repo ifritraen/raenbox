@@ -41,19 +41,19 @@ void main() async {
   final apiService = MovieBoxApiService(storage);
   final downloadService = DownloadService.getInstance(storage);
 
-  runApp(MovieBoxApp(
+  runApp(RaenBoxApp(
     storage: storage,
     apiService: apiService,
     downloadService: downloadService,
   ));
 }
 
-class MovieBoxApp extends StatelessWidget {
+class RaenBoxApp extends StatelessWidget {
   final LocalStorageService storage;
   final MovieBoxApiService apiService;
   final DownloadService downloadService;
 
-  const MovieBoxApp({
+  const RaenBoxApp({
     super.key,
     required this.storage,
     required this.apiService,

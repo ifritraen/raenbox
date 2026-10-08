@@ -1,8 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:moviebox_plus/core/network/moviebox_signer.dart';
-import 'package:moviebox_plus/core/proxy/local_stream_proxy.dart';
-import 'package:moviebox_plus/data/models/moviebox_models.dart';
-import 'package:moviebox_plus/data/services/local_storage_service.dart';
+import 'package:raenbox/core/network/moviebox_signer.dart';
+import 'package:raenbox/core/proxy/local_stream_proxy.dart';
+import 'package:raenbox/data/models/moviebox_models.dart';
+import 'package:raenbox/data/services/local_storage_service.dart';
 
 void main() {
   group('MovieBoxSigner Unit Tests', () {

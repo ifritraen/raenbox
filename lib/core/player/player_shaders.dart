@@ -180,7 +180,7 @@ class PlayerShaders {
   static Future<String> getShaderBasePath() async {
     if (_cachedShaderDir != null) return _cachedShaderDir!;
     final docs = await getApplicationDocumentsDirectory();
-    final shaderDir = Directory('${docs.path}/MovieBox+/mpv/Shaders');
+    final shaderDir = Directory('${docs.path}/RaenBox/mpv/Shaders');
     if (!await shaderDir.exists()) {
       await shaderDir.create(recursive: true);
     }
